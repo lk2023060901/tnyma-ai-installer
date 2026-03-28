@@ -99,13 +99,62 @@
     "channel": {
         "title": "Connect a Messaging Channel",
         "subtitle": "Choose a platform to connect your AI assistant to. You can add more channels later in Settings.",
+        "selectLabel": "Choose a channel to configure",
+        "selectPlaceholder": "Select Feishu or QQ Bot",
+        "selectHint": "If you do not need a messaging channel yet, continue to the next step and configure it later from Settings.",
+        "viewDocs": "View docs",
+        "deployMode": "Deployment Mode",
         "configure": "Configure {{name}}",
         "howTo": "How to connect:",
-        "viewDocs": "View docs",
         "validationError": "Validation failed",
         "connected": "{{name}} Connected",
         "connectedDesc": "Your channel has been configured. It will connect when the Gateway starts.",
-        "configureAnother": "Configure another channel"
+        "configureAnother": "Configure another channel",
+        "qr": {
+            "title": "Scan to connect {{name}}",
+            "description": "Use the corresponding app to scan this QR code. The dialog closes automatically after login succeeds.",
+            "loading": "Generating QR code...",
+            "cancel": "Cancel deployment"
+        },
+        "auto": {
+            "tab": "One-click Deploy",
+            "retry": "Retry",
+            "startFailed": "Failed to start one-click deployment: {{error}}",
+            "failed": "Deployment failed: {{error}}",
+            "steps": {
+                "waiting_for_scan": {
+                    "running": "Waiting for QR login",
+                    "completed": "QR login completed"
+                },
+                "creating_bot": {
+                    "running": "Creating {{name}}",
+                    "completed": "{{name}} created"
+                },
+                "saving_credentials": {
+                    "running": "Saving App ID and secret",
+                    "completed": "App ID and secret saved"
+                },
+                "configuring_bot": {
+                    "running": "Configuring permissions, event callbacks, and long connection",
+                    "completed": "Permissions and callbacks configured"
+                },
+                "publishing_bot": {
+                    "running": "Publishing bot",
+                    "completed": "Bot published"
+                },
+                "updating_profile": {
+                    "running": "Updating bot profile",
+                    "completed": "Bot profile updated"
+                }
+            }
+        },
+        "manual": {
+            "tab": "Manual Deploy",
+            "save": "Save and Continue",
+            "saving": "Saving...",
+            "required": "Fill in all required fields first",
+            "saveFailed": "Failed to save channel config: {{error}}"
+        }
     },
     "installing": {
         "title": "Installing Essential Components",

@@ -166,9 +166,11 @@ pnpm dev
 When you launch TnymaAI for the first time, the **Setup Wizard** will guide you through:
 
 1. **Language & Region** – Configure your preferred locale
-2. **AI Provider** – Choose from OpenClaw's upstream provider auth choices, complete API key or OAuth verification, and sync the provider model list
-3. **Skill Bundles** – Select pre-configured skills for common use cases
-4. **Verification** – Test your configuration before entering the main interface
+2. **Environment Check** – Verify the bundled OpenClaw runtime and start the Gateway
+3. **AI Provider** – Choose from OpenClaw's upstream provider auth choices and complete API key or OAuth verification
+4. **Model Selection** – Sync the provider catalog and save the default model, with the first discovered model preselected
+5. **Feishu / QQ Bots** – Optionally configure Feishu or QQ right after model setup, including the QR-based one-click flows
+6. **Component Installation** – Install the default local skills and finish the desktop onboarding
 
 The wizard preselects your system language when it is supported, and falls back to English otherwise.
 

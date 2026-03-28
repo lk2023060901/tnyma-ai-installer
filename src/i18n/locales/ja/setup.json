@@ -99,13 +99,62 @@
     "channel": {
         "title": "メッセージングチャンネルを接続",
         "subtitle": "AIアシスタントを接続するプラットフォームを選択してください。チャンネルは後で設定で追加できます。",
+        "selectLabel": "設定するチャンネルを選択",
+        "selectPlaceholder": "Feishu または QQ Bot を選択",
+        "selectHint": "まだメッセージングチャンネルが不要な場合は、そのまま次へ進み、後で設定画面から追加できます。",
+        "viewDocs": "ドキュメントを表示",
+        "deployMode": "デプロイ方式",
         "configure": "{{name}} を構成",
         "howTo": "接続方法：",
-        "viewDocs": "ドキュメントを表示",
         "validationError": "検証に失敗しました",
         "connected": "{{name}} 接続済み",
         "connectedDesc": "チャンネルが構成されました。ゲートウェイ起動時に接続されます。",
-        "configureAnother": "別のチャンネルを構成"
+        "configureAnother": "別のチャンネルを構成",
+        "qr": {
+            "title": "{{name}} にログイン",
+            "description": "対応アプリで QR コードをスキャンしてください。ログインが完了するとダイアログは自動で閉じます。",
+            "loading": "QR コードを生成中...",
+            "cancel": "デプロイをキャンセル"
+        },
+        "auto": {
+            "tab": "ワンクリックデプロイ",
+            "retry": "再試行",
+            "startFailed": "ワンクリックデプロイの開始に失敗しました: {{error}}",
+            "failed": "デプロイに失敗しました: {{error}}",
+            "steps": {
+                "waiting_for_scan": {
+                    "running": "QR ログイン待機中",
+                    "completed": "QR ログインが完了しました"
+                },
+                "creating_bot": {
+                    "running": "{{name}} を作成中",
+                    "completed": "{{name}} を作成しました"
+                },
+                "saving_credentials": {
+                    "running": "App ID とシークレットを保存中",
+                    "completed": "App ID とシークレットを保存しました"
+                },
+                "configuring_bot": {
+                    "running": "権限、イベントコールバック、長接続を設定中",
+                    "completed": "権限とコールバックの設定が完了しました"
+                },
+                "publishing_bot": {
+                    "running": "ボットを公開中",
+                    "completed": "ボットを公開しました"
+                },
+                "updating_profile": {
+                    "running": "ボットプロフィールを更新中",
+                    "completed": "ボットプロフィールを更新しました"
+                }
+            }
+        },
+        "manual": {
+            "tab": "手動デプロイ",
+            "save": "保存して続行",
+            "saving": "保存中...",
+            "required": "必須項目をすべて入力してください",
+            "saveFailed": "チャンネル設定の保存に失敗しました: {{error}}"
+        }
     },
     "installing": {
         "title": "必須コンポーネントをインストール中",

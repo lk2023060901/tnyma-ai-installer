@@ -99,13 +99,62 @@
     "channel": {
         "title": "连接消息渠道",
         "subtitle": "选择要连接 AI 助手的平台。您可以稍后在设置中添加更多渠道。",
+        "selectLabel": "选择要配置的渠道",
+        "selectPlaceholder": "请选择飞书或 QQ 机器人",
+        "selectHint": "如果暂时不需要消息渠道，可以直接点击下一步，稍后再到设置页面补充。",
+        "viewDocs": "查看文档",
+        "deployMode": "部署方式",
         "configure": "配置 {{name}}",
         "howTo": "如何连接：",
-        "viewDocs": "查看文档",
         "validationError": "验证失败",
         "connected": "{{name}} 已连接",
         "connectedDesc": "您的渠道已配置。将在网关启动时连接。",
-        "configureAnother": "配置另一个渠道"
+        "configureAnother": "配置另一个渠道",
+        "qr": {
+            "title": "扫码连接 {{name}}",
+            "description": "请使用对应平台扫描二维码完成登录，成功后窗口会自动关闭。",
+            "loading": "正在生成二维码...",
+            "cancel": "取消部署"
+        },
+        "auto": {
+            "tab": "一键部署",
+            "retry": "重新开始",
+            "startFailed": "启动一键部署失败：{{error}}",
+            "failed": "部署失败：{{error}}",
+            "steps": {
+                "waiting_for_scan": {
+                    "running": "正在等待扫码登录",
+                    "completed": "扫码登录已完成"
+                },
+                "creating_bot": {
+                    "running": "正在创建 {{name}}",
+                    "completed": "{{name}} 已创建"
+                },
+                "saving_credentials": {
+                    "running": "正在写入 App ID 和密钥",
+                    "completed": "App ID 和密钥已保存"
+                },
+                "configuring_bot": {
+                    "running": "正在配置权限、事件回调和长连接",
+                    "completed": "权限和回调配置已完成"
+                },
+                "publishing_bot": {
+                    "running": "正在发布机器人",
+                    "completed": "机器人已发布"
+                },
+                "updating_profile": {
+                    "running": "正在补充机器人资料",
+                    "completed": "机器人资料已更新"
+                }
+            }
+        },
+        "manual": {
+            "tab": "手动部署",
+            "save": "保存并继续",
+            "saving": "正在保存...",
+            "required": "请先填写所有必填字段",
+            "saveFailed": "保存渠道配置失败：{{error}}"
+        }
     },
     "installing": {
         "title": "安装必要组件",

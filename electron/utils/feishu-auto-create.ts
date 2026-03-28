@@ -223,6 +223,7 @@ const FALLBACK_SCOPE_IDS: Record<string, string> = {
 };
 
 const SESSION_EVENT_QR = 'qr';
+const SESSION_EVENT_PROGRESS = 'progress';
 
 type Credentials = {
   cookieString: string;
@@ -251,6 +252,11 @@ type SessionQrPayload = {
   qrcodeUrl: string;
 };
 
+export type AutoCreateProgressPayload = {
+  status: 'running' | 'completed' | 'error';
+  stepId: string;
+};
+
 export type FeishuAutoCreateStartOptions = {
   appName: string;
   appDescription?: string;
@@ -272,6 +278,7 @@ export type FeishuAutoCreateWaitOptions = {
   timeoutMs?: number;
   onQrRefresh?: (payload: SessionQrPayload) => void | Promise<void>;
   onCredentialsReady?: (payload: FeishuCredentialsReadyPayload) => void | Promise<void>;
+  onProgress?: (payload: AutoCreateProgressPayload) => void | Promise<void>;
 };
 
 export type FeishuAutoCreateResult = {
@@ -862,11 +869,25 @@ class FeishuAutoCreateSession extends EventEmitter {
         }
       : null;
 
+    const onProgress = options.onProgress
+      ? async (payload: AutoCreateProgressPayload) => {
+          try {
+            await options.onProgress?.(payload);
+          } catch {
+            // Ignore UI callback failures and keep the login session alive.
+          }
+        }
+      : null;
+
     if (onQrRefresh) {
       this.on(SESSION_EVENT_QR, onQrRefresh);
       if (this.latestQrDataUrl) {
         void onQrRefresh({ qrcodeUrl: this.latestQrDataUrl });
       }
+    }
+
+    if (onProgress) {
+      this.on(SESSION_EVENT_PROGRESS, onProgress);
     }
 
     try {
@@ -879,6 +900,9 @@ class FeishuAutoCreateSession extends EventEmitter {
       if (onQrRefresh) {
         this.off(SESSION_EVENT_QR, onQrRefresh);
       }
+      if (onProgress) {
+        this.off(SESSION_EVENT_PROGRESS, onProgress);
+      }
     }
   }
 
@@ -888,13 +912,15 @@ class FeishuAutoCreateSession extends EventEmitter {
   }
 
   private async run(): Promise<void> {
+    this.publishProgress('waiting_for_scan', 'running');
+
     const { chromium } = await import('playwright-core');
     const executablePath = findChromeExecutable();
     const userDataDir = await this.tempUserDataDirPromise;
 
     this.context = await chromium.launchPersistentContext(userDataDir, {
       executablePath,
-      headless: false,
+      headless: true,
       viewport: { width: 960, height: 720 },
       args: [
         '--no-first-run',
@@ -919,6 +945,9 @@ class FeishuAutoCreateSession extends EventEmitter {
       throw new Error('Feishu login was cancelled.');
     }
 
+    this.publishProgress('waiting_for_scan', 'completed');
+    this.publishProgress('creating_bot', 'running');
+
     const creds = await captureCredentials(this.context, this.page);
     const name = normalizeAppName(this.options.appName);
     const desc = normalizeAppDescription(this.options.appDescription);
@@ -927,6 +956,8 @@ class FeishuAutoCreateSession extends EventEmitter {
     const appSecret = await getFeishuAppSecret(creds, appId);
 
     await enableFeishuBot(creds, appId);
+    this.publishProgress('creating_bot', 'completed');
+    this.publishProgress('saving_credentials', 'running');
 
     if (this.credentialsReadyHook) {
       await this.credentialsReadyHook({
@@ -935,12 +966,17 @@ class FeishuAutoCreateSession extends EventEmitter {
         connectionMode: 'websocket',
       });
     }
+    this.publishProgress('saving_credentials', 'completed');
 
+    this.publishProgress('configuring_bot', 'running');
     const unresolvedScopes = await updateFeishuScopes(creds, appId);
     await updateFeishuEvents(creds, appId);
     await switchFeishuCallbackMode(creds, appId);
+    this.publishProgress('configuring_bot', 'completed');
+    this.publishProgress('publishing_bot', 'running');
     const creatorId = await getCurrentUserId(creds);
     const versionId = await createVersionAndPublish(creds, appId, creatorId);
+    this.publishProgress('publishing_bot', 'completed');
 
     this.complete({
       appId,
@@ -982,6 +1018,7 @@ class FeishuAutoCreateSession extends EventEmitter {
 
       const status = payload?.data?.step_info?.status;
       if (status === 5) {
+        this.publishProgress('waiting_for_scan', 'running');
         await this.refreshQr();
       }
     } catch {
@@ -996,6 +1033,10 @@ class FeishuAutoCreateSession extends EventEmitter {
       this.firstQr.resolve(qrcodeUrl);
     }
     this.emit(SESSION_EVENT_QR, { qrcodeUrl });
+  }
+
+  private publishProgress(stepId: string, status: AutoCreateProgressPayload['status']): void {
+    this.emit(SESSION_EVENT_PROGRESS, { stepId, status });
   }
 
   private async refreshQr(): Promise<void> {
@@ -1024,6 +1065,7 @@ class FeishuAutoCreateSession extends EventEmitter {
   private fail(error: unknown): void {
     if (this.closed) return;
     this.closed = true;
+    this.publishProgress('failed', 'error');
     this.firstQr.reject(error);
     this.completion.reject(error);
     void this.cleanup();

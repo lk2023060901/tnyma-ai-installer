@@ -32,6 +32,7 @@ const DEFAULT_APP_DESCRIPTION = 'Created by TnymaAI';
 const QQ_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 const SESSION_EVENT_QR = 'qr';
+const SESSION_EVENT_PROGRESS = 'progress';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -41,6 +42,11 @@ type Deferred<T> = {
 
 type SessionQrPayload = {
   qrcodeUrl: string;
+};
+
+export type AutoCreateProgressPayload = {
+  status: 'running' | 'completed' | 'error';
+  stepId: string;
 };
 
 type QQBotCookieCredentials = {
@@ -89,6 +95,7 @@ export type QQBotCredentialsReadyPayload = {
 
 export type QQBotAutoCreateWaitOptions = {
   onCredentialsReady?: (payload: QQBotCredentialsReadyPayload) => void | Promise<void>;
+  onProgress?: (payload: AutoCreateProgressPayload) => void | Promise<void>;
   onQrRefresh?: (payload: SessionQrPayload) => void | Promise<void>;
   timeoutMs?: number;
 };
@@ -536,11 +543,25 @@ class QQBotAutoCreateSession extends EventEmitter {
         }
       : null;
 
+    const onProgress = options.onProgress
+      ? async (payload: AutoCreateProgressPayload) => {
+          try {
+            await options.onProgress?.(payload);
+          } catch {
+            // Ignore UI callback errors and keep the session alive.
+          }
+        }
+      : null;
+
     if (onQrRefresh) {
       this.on(SESSION_EVENT_QR, onQrRefresh);
       if (this.latestQrDataUrl) {
         void onQrRefresh({ qrcodeUrl: this.latestQrDataUrl });
       }
+    }
+
+    if (onProgress) {
+      this.on(SESSION_EVENT_PROGRESS, onProgress);
     }
 
     try {
@@ -553,6 +574,9 @@ class QQBotAutoCreateSession extends EventEmitter {
       if (onQrRefresh) {
         this.off(SESSION_EVENT_QR, onQrRefresh);
       }
+      if (onProgress) {
+        this.off(SESSION_EVENT_PROGRESS, onProgress);
+      }
     }
   }
 
@@ -562,13 +586,15 @@ class QQBotAutoCreateSession extends EventEmitter {
   }
 
   private async run(): Promise<void> {
+    this.publishProgress('waiting_for_scan', 'running');
+
     const { chromium } = await import('playwright-core');
     const executablePath = findChromeExecutable();
     const userDataDir = await this.tempUserDataDirPromise;
 
     this.context = await chromium.launchPersistentContext(userDataDir, {
       executablePath,
-      headless: false,
+      headless: true,
       viewport: { width: 960, height: 720 },
       args: [
         '--no-first-run',
@@ -597,6 +623,9 @@ class QQBotAutoCreateSession extends EventEmitter {
       throw new Error('QQ login was cancelled.');
     }
 
+    this.publishProgress('waiting_for_scan', 'completed');
+    this.publishProgress('creating_bot', 'running');
+
     await this.context.addCookies([{
       name: 'developer_id_lite',
       value: developerId,
@@ -617,13 +646,18 @@ class QQBotAutoCreateSession extends EventEmitter {
     const name = normalizeBotName(this.options.appName);
     const desc = normalizeBotDescription(this.options.appDescription);
     const { appId, clientSecret } = await createQqBot(creds);
+    this.publishProgress('creating_bot', 'completed');
+    this.publishProgress('saving_credentials', 'running');
 
     if (this.credentialsReadyHook) {
       await this.credentialsReadyHook({ appId, clientSecret });
     }
+    this.publishProgress('saving_credentials', 'completed');
 
+    this.publishProgress('updating_profile', 'running');
     const avatar = await uploadDefaultAvatar(creds);
     await modifyQqBotProfile(creds, appId, name, desc, avatar).catch(() => {});
+    this.publishProgress('updating_profile', 'completed');
 
     this.complete({
       appId,
@@ -670,6 +704,7 @@ class QQBotAutoCreateSession extends EventEmitter {
         }
         case QQ_POLL_EXPIRED:
         case QQ_POLL_REJECTED:
+          this.publishProgress('waiting_for_scan', 'running');
           await this.refreshQr();
           break;
         case QQ_POLL_WAITING:
@@ -691,6 +726,10 @@ class QQBotAutoCreateSession extends EventEmitter {
       this.firstQr.resolve(qrcodeUrl);
     }
     this.emit(SESSION_EVENT_QR, { qrcodeUrl });
+  }
+
+  private publishProgress(stepId: string, status: AutoCreateProgressPayload['status']): void {
+    this.emit(SESSION_EVENT_PROGRESS, { stepId, status });
   }
 
   private async refreshQr(): Promise<void> {
@@ -719,6 +758,7 @@ class QQBotAutoCreateSession extends EventEmitter {
   private fail(error: unknown): void {
     if (this.closed) return;
     this.closed = true;
+    this.publishProgress('failed', 'error');
     this.firstQr.reject(error);
     this.loginSuccess.reject(error);
     this.completion.reject(error);

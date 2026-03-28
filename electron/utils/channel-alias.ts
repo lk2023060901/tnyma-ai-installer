@@ -7,7 +7,7 @@ const TRAILING_DASH_RE = /-+$/;
 export const UI_WECHAT_CHANNEL_TYPE = 'wechat';
 export const OPENCLAW_WECHAT_CHANNEL_TYPE = 'openclaw-weixin';
 
-export type QrChannelEvent = 'qr' | 'success' | 'error';
+export type QrChannelEvent = 'qr' | 'success' | 'error' | 'progress';
 
 export function toOpenClawChannelType(channelType: string): string {
   return channelType === UI_WECHAT_CHANNEL_TYPE ? OPENCLAW_WECHAT_CHANNEL_TYPE : channelType;

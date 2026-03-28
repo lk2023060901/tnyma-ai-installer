@@ -24,7 +24,10 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron/main',
             rollupOptions: {
-              external: ['electron-store', 'electron-updater', 'ws'],
+              // Keep modules like playwright-core external in the main bundle.
+              // They resolve package-relative assets/package.json at runtime and
+              // break when Rollup inlines them into a single file for packaged apps.
+              external: ['electron-store', 'electron-updater', 'playwright-core', 'ws'],
             },
           },
         },

@@ -19,9 +19,11 @@ const HOST_EVENT_TO_IPC_CHANNEL: Record<string, string> = {
   'channel:wechat-success': 'channel:wechat-success',
   'channel:wechat-error': 'channel:wechat-error',
   'channel:feishu-qr': 'channel:feishu-qr',
+  'channel:feishu-progress': 'channel:feishu-progress',
   'channel:feishu-success': 'channel:feishu-success',
   'channel:feishu-error': 'channel:feishu-error',
   'channel:qqbot-qr': 'channel:qqbot-qr',
+  'channel:qqbot-progress': 'channel:qqbot-progress',
   'channel:qqbot-success': 'channel:qqbot-success',
   'channel:qqbot-error': 'channel:qqbot-error',
 };

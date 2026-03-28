@@ -50,8 +50,9 @@ const STEP = {
   RUNTIME: 1,
   PROVIDER: 2,
   MODEL: 3,
-  INSTALLING: 4,
-  COMPLETE: 5,
+  CHANNEL: 4,
+  INSTALLING: 5,
+  COMPLETE: 6,
 } as const;
 
 const getSteps = (t: TFunction): SetupStep[] => [
@@ -74,6 +75,11 @@ const getSteps = (t: TFunction): SetupStep[] => [
     id: 'model',
     title: t('steps.model.title'),
     description: t('steps.model.description'),
+  },
+  {
+    id: 'channel',
+    title: t('steps.channel.title'),
+    description: t('steps.channel.description'),
   },
   {
     id: 'installing',
@@ -133,12 +139,51 @@ import {
   resolveProviderOAuthStartPayload,
   type SupportedProviderChoice,
 } from '@/lib/provider-auth-choices';
+import { CHANNEL_META, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import appIcon from '@/assets/logo.svg';
+import feishuIcon from '@/assets/channels/feishu.svg';
+import qqIcon from '@/assets/channels/qq.svg';
 
 // Use the shared provider registry for setup providers
 const providers = SETUP_PROVIDERS;
 const CONTROL_UI_POLL_RETRIES = 12;
 const CONTROL_UI_POLL_INTERVAL_MS = 1000;
+type SetupManagedChannelType = Extract<ChannelType, 'feishu' | 'qqbot'>;
+type SetupChannelMode = 'auto' | 'manual';
+type AutoSetupProgressStatus = 'pending' | 'running' | 'completed' | 'error';
+type AutoSetupProgressPayload = {
+  status: Exclude<AutoSetupProgressStatus, 'pending'>;
+  stepId: string;
+};
+type AutoSetupProgressEntry = {
+  error?: string;
+  status: AutoSetupProgressStatus;
+  stepId: string;
+};
+
+const SETUP_MANAGED_CHANNELS: Array<{
+  type: SetupManagedChannelType;
+  iconSrc: string;
+  iconClassName?: string;
+  hintKey: string;
+}> = [
+  {
+    type: 'feishu',
+    iconSrc: feishuIcon,
+    iconClassName: 'dark:invert',
+    hintKey: 'channels:dialog.feishuAutoHint',
+  },
+  {
+    type: 'qqbot',
+    iconSrc: qqIcon,
+    hintKey: 'channels:dialog.qqbotAutoHint',
+  },
+];
+const CHANNEL_AUTO_STEP_ORDER: Record<SetupManagedChannelType, string[]> = {
+  feishu: ['waiting_for_scan', 'creating_bot', 'saving_credentials', 'configuring_bot', 'publishing_bot'],
+  qqbot: ['waiting_for_scan', 'creating_bot', 'saving_credentials', 'updating_profile'],
+};
+const setupChannelInputClasses = 'bg-background border-input';
 
 interface SetupStepHandle {
   submit: () => Promise<boolean>;
@@ -204,7 +249,7 @@ function getProtocolBaseUrlPlaceholder(
   return 'https://api.example.com/v1';
 }
 
-// NOTE: Channel types moved to Settings > Channels page
+// NOTE: Full channel management lives in Settings > Channels page
 // NOTE: Skill bundles moved to Settings > Skills page - auto-install essential skills during setup
 
 export function Setup() {
@@ -220,6 +265,7 @@ export function Setup() {
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [providerStepReady, setProviderStepReady] = useState(false);
   const [modelStepReady, setModelStepReady] = useState(false);
+  const [channelStepBusy, setChannelStepBusy] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [stepSubmitting, setStepSubmitting] = useState(false);
   // Installation state for the Installing step
@@ -248,6 +294,8 @@ export function Setup() {
         return providerStepReady && !stepSubmitting;
       case STEP.MODEL:
         return modelStepReady && !stepSubmitting;
+      case STEP.CHANNEL:
+        return !stepSubmitting && !channelStepBusy;
       case STEP.INSTALLING:
         return false; // Cannot manually proceed, auto-proceeds when done
       case STEP.COMPLETE:
@@ -255,7 +303,7 @@ export function Setup() {
       default:
         return true;
     }
-  }, [modelStepReady, providerStepReady, runtimeChecksPassed, safeStepIndex, stepSubmitting]);
+  }, [channelStepBusy, modelStepReady, providerStepReady, runtimeChecksPassed, safeStepIndex, stepSubmitting]);
 
   useEffect(() => {
     if (setupComplete) {
@@ -326,6 +374,12 @@ export function Setup() {
     markSetupComplete();
     setCurrentStep(STEP.COMPLETE);
   };
+
+  const handleChannelConfigured = useCallback(() => {
+    setCurrentStep((stepIndex) => (
+      stepIndex === STEP.CHANNEL ? stepIndex + 1 : stepIndex
+    ));
+  }, []);
 
   // Auto-proceed when installation is complete
   const handleInstallationComplete = useCallback((skills: string[]) => {
@@ -412,6 +466,12 @@ export function Setup() {
                   onCanProceedChange={setModelStepReady}
                 />
               )}
+              {safeStepIndex === STEP.CHANNEL && (
+                <ChannelContent
+                  onBusyChange={setChannelStepBusy}
+                  onComplete={handleChannelConfigured}
+                />
+              )}
               {safeStepIndex === STEP.INSTALLING && (
                 <InstallingContent
                   skills={getDefaultSkills(t)}
@@ -432,7 +492,7 @@ export function Setup() {
               <div className="flex justify-between">
                 <div>
                   {!isFirstStep && (
-                    <Button variant="ghost" onClick={handleBack} disabled={stepSubmitting}>
+                    <Button variant="ghost" onClick={handleBack} disabled={stepSubmitting || channelStepBusy}>
                       <ChevronLeft className="h-4 w-4 mr-2" />
                       {t('nav.back')}
                     </Button>
@@ -440,11 +500,11 @@ export function Setup() {
                 </div>
                 <div className="flex gap-2">
                   {!isLastStep && safeStepIndex !== STEP.RUNTIME && (
-                    <Button variant="ghost" onClick={handleSkip} disabled={stepSubmitting}>
+                    <Button variant="ghost" onClick={handleSkip} disabled={stepSubmitting || channelStepBusy}>
                       {t('nav.skipSetup')}
                     </Button>
                   )}
-                  <Button onClick={handleNext} disabled={!canProceed || stepSubmitting}>
+                  <Button onClick={handleNext} disabled={!canProceed || stepSubmitting || channelStepBusy}>
                     {isLastStep ? (
                       t('nav.getStarted')
                     ) : stepSubmitting ? (
@@ -2126,6 +2186,654 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
     </div>
   );
 });
+
+interface ChannelContentProps {
+  onBusyChange: (busy: boolean) => void;
+  onComplete: () => void;
+}
+
+function ChannelContent({ onBusyChange, onComplete }: ChannelContentProps) {
+  const { t } = useTranslation(['setup', 'channels']);
+  const [configuredTypes, setConfiguredTypes] = useState<SetupManagedChannelType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedChannel, setSelectedChannel] = useState<SetupManagedChannelType | ''>('');
+  const [setupMode, setSetupMode] = useState<SetupChannelMode>('auto');
+  const [manualConfigValues, setManualConfigValues] = useState<Record<string, string>>({});
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  const [manualSaving, setManualSaving] = useState(false);
+  const [autoFlowState, setAutoFlowState] = useState<'idle' | 'starting' | 'running' | 'success' | 'error'>('idle');
+  const [autoError, setAutoError] = useState<string | null>(null);
+  const [progressEntries, setProgressEntries] = useState<AutoSetupProgressEntry[]>([]);
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [qrDialogOpen, setQrDialogOpen] = useState(false);
+  const activeChannelRef = useRef<SetupManagedChannelType | null>(null);
+  const completeTimerRef = useRef<number | null>(null);
+
+  const isBusy = manualSaving || autoFlowState === 'starting' || autoFlowState === 'running';
+  const selectedChannelMeta = selectedChannel ? CHANNEL_META[selectedChannel] : null;
+  const selectedChannelInfo = selectedChannel
+    ? SETUP_MANAGED_CHANNELS.find((channel) => channel.type === selectedChannel) ?? null
+    : null;
+  const isConfigured = selectedChannel ? configuredTypes.includes(selectedChannel) : false;
+
+  useEffect(() => {
+    onBusyChange(isBusy);
+  }, [isBusy, onBusyChange]);
+
+  const loadConfiguredTypes = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const result = await hostApiFetch<{ success: boolean; channels?: string[] }>('/api/channels/configured');
+      const configured = (result.channels ?? []).filter(
+        (channelType): channelType is SetupManagedChannelType => (
+          channelType === 'feishu' || channelType === 'qqbot'
+        ),
+      );
+      setConfiguredTypes(configured);
+    } catch (error) {
+      setConfiguredTypes([]);
+      setLoadError(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadChannelConfig = useCallback(async (channelType: SetupManagedChannelType) => {
+    try {
+      const result = await hostApiFetch<{ success: boolean; values?: Record<string, string> }>(
+        `/api/channels/config/${encodeURIComponent(channelType)}`,
+      );
+      setManualConfigValues(result.success && result.values ? result.values : {});
+    } catch {
+      setManualConfigValues({});
+    }
+  }, []);
+
+  const cancelAutoDeploy = useCallback(async (channelType?: SetupManagedChannelType | null) => {
+    const targetChannel = channelType ?? activeChannelRef.current;
+    if (!targetChannel) {
+      return;
+    }
+    activeChannelRef.current = null;
+    try {
+      await hostApiFetch(`/api/channels/${encodeURIComponent(targetChannel)}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    } catch {
+      // Ignore cancel failures during mode switching/unmount.
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadConfiguredTypes();
+  }, [loadConfiguredTypes]);
+
+  useEffect(() => {
+    return () => {
+      if (completeTimerRef.current) {
+        window.clearTimeout(completeTimerRef.current);
+      }
+      void cancelAutoDeploy();
+    };
+  }, [cancelAutoDeploy]);
+
+  useEffect(() => {
+    if (!selectedChannel) {
+      setManualConfigValues({});
+      setShowSecrets({});
+      setAutoFlowState('idle');
+      setAutoError(null);
+      setProgressEntries([]);
+      setQrCode(null);
+      setQrDialogOpen(false);
+      return;
+    }
+
+    void loadChannelConfig(selectedChannel);
+  }, [loadChannelConfig, selectedChannel]);
+
+  const handleOpenDocs = useCallback(async (channelType: SetupManagedChannelType) => {
+    const docsUrl = t(CHANNEL_META[channelType].docsUrl);
+    try {
+      await invokeIpc('shell:openExternal', docsUrl);
+    } catch {
+      window.open(docsUrl, '_blank', 'noopener,noreferrer');
+    }
+  }, [t]);
+
+  const getInitialProgressEntries = useCallback((channelType: SetupManagedChannelType): AutoSetupProgressEntry[] => (
+    CHANNEL_AUTO_STEP_ORDER[channelType].map((stepId, index) => ({
+      stepId,
+      status: index === 0 ? 'running' : 'pending',
+    }))
+  ), []);
+
+  const updateProgressEntries = useCallback((
+    channelType: SetupManagedChannelType,
+    payload: AutoSetupProgressPayload & { error?: string },
+  ) => {
+    const stepOrder = CHANNEL_AUTO_STEP_ORDER[channelType];
+    setProgressEntries((previous) => {
+      const existing = new Map(previous.map((entry) => [entry.stepId, entry]));
+      const nextEntries = stepOrder.map((stepId) => existing.get(stepId) ?? {
+        stepId,
+        status: 'pending' as const,
+      });
+
+      if (!stepOrder.includes(payload.stepId)) {
+        return nextEntries;
+      }
+
+      return nextEntries.map((entry) => (
+        entry.stepId === payload.stepId
+          ? {
+              ...entry,
+              status: payload.status,
+              ...(payload.error ? { error: payload.error } : {}),
+            }
+          : entry
+      ));
+    });
+  }, []);
+
+  const beginAutoDeploy = useCallback(async (channelType: SetupManagedChannelType) => {
+    await cancelAutoDeploy();
+    activeChannelRef.current = channelType;
+    setAutoFlowState('starting');
+    setAutoError(null);
+    setQrCode(null);
+    setQrDialogOpen(true);
+    setProgressEntries(getInitialProgressEntries(channelType));
+
+    try {
+      const response = await hostApiFetch<{ success?: boolean; error?: string }>(
+        `/api/channels/${encodeURIComponent(channelType)}/start`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            appDescription: t(`channels:meta.${channelType}.autoAppDescription`),
+          }),
+        },
+      );
+
+      if (response && response.success === false) {
+        throw new Error(response.error || t('channel.auto.startFailed'));
+      }
+
+      setAutoFlowState('running');
+    } catch (error) {
+      activeChannelRef.current = null;
+      setAutoFlowState('error');
+      setQrDialogOpen(false);
+      setAutoError(String(error));
+      setProgressEntries((previous) => previous.map((entry, index) => (
+        index === 0 && entry.status === 'running'
+          ? { ...entry, status: 'error', error: String(error) }
+          : entry
+      )));
+      toast.error(t('channel.auto.startFailed', { error: String(error) }));
+    }
+  }, [cancelAutoDeploy, getInitialProgressEntries, t]);
+
+  const handleSelectChannel = useCallback(async (value: string) => {
+    const nextChannel = (value === 'feishu' || value === 'qqbot')
+      ? value
+      : '';
+
+    if (completeTimerRef.current) {
+      window.clearTimeout(completeTimerRef.current);
+      completeTimerRef.current = null;
+    }
+
+    await cancelAutoDeploy();
+    setSelectedChannel(nextChannel);
+    setSetupMode('auto');
+    setAutoFlowState('idle');
+    setAutoError(null);
+    setQrCode(null);
+    setQrDialogOpen(false);
+    setProgressEntries([]);
+    setShowSecrets({});
+
+    if (nextChannel) {
+      void beginAutoDeploy(nextChannel);
+    }
+  }, [beginAutoDeploy, cancelAutoDeploy]);
+
+  const handleSwitchMode = useCallback(async (nextMode: SetupChannelMode) => {
+    setSetupMode(nextMode);
+    setAutoError(null);
+    setQrCode(null);
+    setQrDialogOpen(false);
+
+    if (completeTimerRef.current) {
+      window.clearTimeout(completeTimerRef.current);
+      completeTimerRef.current = null;
+    }
+
+    if (nextMode === 'manual') {
+      setAutoFlowState('idle');
+      setProgressEntries([]);
+      await cancelAutoDeploy();
+      return;
+    }
+
+    if (selectedChannel) {
+      void beginAutoDeploy(selectedChannel);
+    }
+  }, [beginAutoDeploy, cancelAutoDeploy, selectedChannel]);
+
+  useEffect(() => {
+    if (!selectedChannel) {
+      return () => {};
+    }
+
+    const channelType = selectedChannel;
+    const removeQrListener = subscribeHostEvent<{ qr?: string; raw?: string }>(
+      `channel:${channelType}-qr`,
+      (payload) => {
+        const nextQr = typeof payload.qr === 'string' && payload.qr.trim()
+          ? payload.qr.trim()
+          : (typeof payload.raw === 'string' ? payload.raw.trim() : '');
+        if (!nextQr) {
+          return;
+        }
+        setQrCode(nextQr.startsWith('data:image') ? nextQr : `data:image/png;base64,${nextQr}`);
+        setQrDialogOpen(true);
+        setAutoFlowState('running');
+      },
+    );
+
+    const removeProgressListener = subscribeHostEvent<AutoSetupProgressPayload>(
+      `channel:${channelType}-progress`,
+      (payload) => {
+        updateProgressEntries(channelType, payload);
+        if (payload.stepId === 'waiting_for_scan' && payload.status === 'completed') {
+          setQrDialogOpen(false);
+          setQrCode(null);
+        }
+      },
+    );
+
+    const removeSuccessListener = subscribeHostEvent(
+      `channel:${channelType}-success`,
+      () => {
+        activeChannelRef.current = null;
+        setAutoFlowState('success');
+        setQrDialogOpen(false);
+        setQrCode(null);
+        setAutoError(null);
+        void loadConfiguredTypes();
+        toast.success(t('channel.connected', { name: CHANNEL_NAMES[channelType] }));
+        if (completeTimerRef.current) {
+          window.clearTimeout(completeTimerRef.current);
+        }
+        completeTimerRef.current = window.setTimeout(() => {
+          completeTimerRef.current = null;
+          onComplete();
+        }, 600);
+      },
+    );
+
+    const removeErrorListener = subscribeHostEvent<string>(
+      `channel:${channelType}-error`,
+      (error) => {
+        activeChannelRef.current = null;
+        setQrDialogOpen(false);
+        setQrCode(null);
+        setAutoFlowState('error');
+        setAutoError(String(error));
+        setProgressEntries((previous) => {
+          const nextEntries = [...previous];
+          const runningIndex = nextEntries.findIndex((entry) => entry.status === 'running');
+          if (runningIndex >= 0) {
+            nextEntries[runningIndex] = {
+              ...nextEntries[runningIndex],
+              status: 'error',
+              error: String(error),
+            };
+          }
+          return nextEntries;
+        });
+        toast.error(t('channel.auto.startFailed', { error: String(error) }));
+      },
+    );
+
+    return () => {
+      removeQrListener();
+      removeProgressListener();
+      removeSuccessListener();
+      removeErrorListener();
+    };
+  }, [loadConfiguredTypes, onComplete, selectedChannel, t, updateProgressEntries]);
+
+  const handleManualFieldChange = useCallback((key: string, value: string) => {
+    setManualConfigValues((previous) => ({ ...previous, [key]: value }));
+  }, []);
+
+  const handleSaveManual = useCallback(async () => {
+    if (!selectedChannel || !selectedChannelMeta) {
+      return;
+    }
+
+    const missingRequiredField = selectedChannelMeta.configFields.find(
+      (field) => field.required && !(manualConfigValues[field.key] || '').trim(),
+    );
+    if (missingRequiredField) {
+      toast.error(t('channel.manual.required'));
+      return;
+    }
+
+    setManualSaving(true);
+    try {
+      const result = await hostApiFetch<{ success?: boolean; error?: string; warning?: string }>(
+        '/api/channels/config',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            channelType: selectedChannel,
+            config: {
+              ...manualConfigValues,
+              enabled: true,
+            },
+          }),
+        },
+      );
+
+      if (!result?.success) {
+        throw new Error(result?.error || t('channel.manual.saveFailed'));
+      }
+
+      if (result.warning) {
+        toast.warning(result.warning);
+      }
+
+      await loadConfiguredTypes();
+      toast.success(t('channel.connected', { name: CHANNEL_NAMES[selectedChannel] }));
+      onComplete();
+    } catch (error) {
+      toast.error(t('channel.manual.saveFailed', { error: String(error) }));
+    } finally {
+      setManualSaving(false);
+    }
+  }, [loadConfiguredTypes, manualConfigValues, onComplete, selectedChannel, selectedChannelMeta, t]);
+
+  const getProgressLabel = useCallback((channelType: SetupManagedChannelType, entry: AutoSetupProgressEntry): string => {
+    if (entry.status === 'error') {
+      return t('channel.auto.failed', { error: entry.error || '' });
+    }
+
+    const key = `channel.auto.steps.${entry.stepId}.${entry.status}`;
+    const fallbackKey = `channel.auto.steps.${entry.stepId}.running`;
+    return t([key, fallbackKey], { name: CHANNEL_NAMES[channelType] });
+  }, [t]);
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <p className="text-sm text-muted-foreground">{t('channel.subtitle')}</p>
+        <p className="text-xs text-muted-foreground/80">{t('steps.channel.description')}</p>
+      </div>
+
+      {loadError && (
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
+          {loadError}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <Label htmlFor="setup-channel-type">{t('channel.selectLabel')}</Label>
+        <Select
+          id="setup-channel-type"
+          value={selectedChannel}
+          onChange={(event) => {
+            void handleSelectChannel(event.target.value);
+          }}
+          className="bg-background border-input"
+          disabled={loading || isBusy}
+        >
+          <option value="">{t('channel.selectPlaceholder')}</option>
+          {SETUP_MANAGED_CHANNELS.map((channel) => (
+            <option key={channel.type} value={channel.type}>
+              {CHANNEL_NAMES[channel.type]}
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      {!selectedChannel ? (
+        <div className="rounded-2xl border border-dashed border-border bg-muted/10 px-5 py-10 text-center text-sm text-muted-foreground">
+          {t('channel.selectHint')}
+        </div>
+      ) : (
+        <div className="space-y-4 rounded-2xl border border-border bg-muted/15 p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border bg-background">
+                {selectedChannelInfo && (
+                  <img
+                    src={selectedChannelInfo.iconSrc}
+                    alt={CHANNEL_NAMES[selectedChannel]}
+                    className={cn('h-6 w-6 object-contain', selectedChannelInfo.iconClassName)}
+                  />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-base font-semibold">{CHANNEL_NAMES[selectedChannel]}</p>
+                  {isConfigured && (
+                    <span className="inline-flex items-center rounded-full border border-green-500/20 bg-green-500/15 px-2 py-0.5 text-[11px] font-medium text-green-400">
+                      {t('channels:configuredBadge')}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {t(selectedChannelMeta?.description || '')}
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void handleOpenDocs(selectedChannel)}
+              disabled={isBusy}
+            >
+              {t('channel.viewDocs')}
+            </Button>
+          </div>
+
+          <div className="space-y-3">
+            <Label>{t('channel.deployMode')}</Label>
+            <div className="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-background/70 p-1">
+              <button
+                type="button"
+                onClick={() => void handleSwitchMode('auto')}
+                disabled={isBusy && setupMode === 'auto'}
+                className={cn(
+                  'rounded-xl px-4 py-2 text-sm transition-colors',
+                  setupMode === 'auto'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                )}
+              >
+                {t('channel.auto.tab')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSwitchMode('manual')}
+                disabled={isBusy && setupMode === 'auto'}
+                className={cn(
+                  'rounded-xl px-4 py-2 text-sm transition-colors',
+                  setupMode === 'manual'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                )}
+              >
+                {t('channel.manual.tab')}
+              </button>
+            </div>
+          </div>
+
+          {setupMode === 'auto' ? (
+            <div className="space-y-4 rounded-2xl border border-border bg-background/70 p-5">
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {t(selectedChannelInfo?.hintKey || '')}
+                </p>
+                {autoError && (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                    {autoError}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                {progressEntries.filter((entry) => entry.status !== 'pending').map((entry) => (
+                  <div key={entry.stepId} className="flex items-center gap-3 rounded-xl border border-border/70 bg-muted/20 px-4 py-3">
+                    {entry.status === 'completed' ? (
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-500/20 text-green-400">
+                        <Check className="h-4 w-4" />
+                      </span>
+                    ) : entry.status === 'running' ? (
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-400">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </span>
+                    ) : (
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-red-400">
+                        <XCircle className="h-4 w-4" />
+                      </span>
+                    )}
+                    <p className="text-sm">{getProgressLabel(selectedChannel, entry)}</p>
+                  </div>
+                ))}
+              </div>
+
+              {autoFlowState === 'error' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void beginAutoDeploy(selectedChannel)}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {t('channel.auto.retry')}
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4 rounded-2xl border border-border bg-background/70 p-5">
+              <p className="text-sm text-muted-foreground">
+                {t(`channels:dialog.${selectedChannel}ManualHint`)}
+              </p>
+              {selectedChannelMeta?.configFields.map((field) => {
+                const isPassword = field.type === 'password';
+                return (
+                  <div key={field.key} className="space-y-2">
+                    <Label htmlFor={`setup-${selectedChannel}-${field.key}`}>
+                      {t(field.label)}
+                      {field.required && <span className="ml-1 text-destructive">*</span>}
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id={`setup-${selectedChannel}-${field.key}`}
+                        type={isPassword && !showSecrets[field.key] ? 'password' : 'text'}
+                        value={manualConfigValues[field.key] || ''}
+                        onChange={(event) => handleManualFieldChange(field.key, event.target.value)}
+                        placeholder={field.placeholder ? t(field.placeholder) : undefined}
+                        className={setupChannelInputClasses}
+                        disabled={manualSaving}
+                      />
+                      {isPassword && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setShowSecrets((previous) => ({
+                            ...previous,
+                            [field.key]: !previous[field.key],
+                          }))}
+                          disabled={manualSaving}
+                        >
+                          {showSecrets[field.key] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      )}
+                    </div>
+                    {field.description && (
+                      <p className="text-xs text-muted-foreground">{t(field.description)}</p>
+                    )}
+                  </div>
+                );
+              })}
+
+              <Button type="button" onClick={() => void handleSaveManual()} disabled={manualSaving}>
+                {manualSaving ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('channel.manual.saving')}
+                  </>
+                ) : (
+                  t('channel.manual.save')
+                )}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {selectedChannel && qrDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              void cancelAutoDeploy(selectedChannel);
+              setQrDialogOpen(false);
+              setQrCode(null);
+              setAutoFlowState('idle');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="space-y-2 text-center">
+              <h3 className="text-xl font-semibold">{t('channel.qr.title', { name: CHANNEL_NAMES[selectedChannel] })}</h3>
+              <p className="text-sm text-muted-foreground">{t('channel.qr.description', { name: CHANNEL_NAMES[selectedChannel] })}</p>
+            </div>
+
+            <div className="mt-6 flex min-h-[288px] items-center justify-center rounded-2xl border border-border bg-background">
+              {qrCode ? (
+                <img src={qrCode} alt={`${CHANNEL_NAMES[selectedChannel]} QR`} className="h-72 w-72 rounded-2xl object-contain" />
+              ) : (
+                <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                  <p className="text-sm">{t('channel.qr.loading')}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  void cancelAutoDeploy(selectedChannel);
+                  setQrDialogOpen(false);
+                  setQrCode(null);
+                  setAutoFlowState('idle');
+                }}
+              >
+                {t('channel.qr.cancel')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // NOTE: SkillsContent component removed - auto-install essential skills
 

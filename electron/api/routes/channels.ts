@@ -202,6 +202,12 @@ async function awaitFeishuAutoCreate(
         await ensureScopedChannelBinding('feishu', accountId);
         scheduleGatewayChannelSaveRefresh(ctx, 'feishu', `feishu:autoCreate:${accountId || 'default'}`);
       },
+      onProgress: async (payload) => {
+        if (!isActiveQrLogin(loginKey, sessionKey)) {
+          return;
+        }
+        emitChannelEvent(ctx, 'feishu', 'progress', payload);
+      },
     });
 
     if (!isActiveQrLogin(loginKey, sessionKey)) {
@@ -254,6 +260,12 @@ async function awaitQQBotAutoCreate(
         }, accountId);
         await ensureScopedChannelBinding('qqbot', accountId);
         scheduleGatewayChannelSaveRefresh(ctx, 'qqbot', `qqbot:autoCreate:${accountId || 'default'}`);
+      },
+      onProgress: async (payload) => {
+        if (!isActiveQrLogin(loginKey, sessionKey)) {
+          return;
+        }
+        emitChannelEvent(ctx, 'qqbot', 'progress', payload);
       },
     });
 
@@ -664,6 +676,10 @@ export async function handleChannelRoutes(
           sessionKey: startResult.sessionKey,
         });
       }
+      emitChannelEvent(ctx, 'feishu', 'progress', {
+        stepId: 'waiting_for_scan',
+        status: 'running',
+      });
       void awaitFeishuAutoCreate(ctx, startResult.sessionKey, loginKey, requestedAccountId);
       sendJson(res, 200, { success: true });
     } catch (error) {
@@ -717,6 +733,10 @@ export async function handleChannelRoutes(
           sessionKey: startResult.sessionKey,
         });
       }
+      emitChannelEvent(ctx, 'qqbot', 'progress', {
+        stepId: 'waiting_for_scan',
+        status: 'running',
+      });
       void awaitQQBotAutoCreate(ctx, startResult.sessionKey, loginKey, requestedAccountId);
       sendJson(res, 200, { success: true });
     } catch (error) {
