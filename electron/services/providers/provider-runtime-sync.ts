@@ -22,6 +22,7 @@ const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.3
 
 type RuntimeProviderSyncContext = {
   runtimeProviderKey: string;
+  providerConfigKey: string;
   meta: ReturnType<typeof getProviderConfig>;
   api: string;
 };
@@ -59,6 +60,17 @@ function normalizeProviderBaseUrl(
 
 function shouldUseExplicitDefaultOverride(config: ProviderConfig, runtimeProviderKey: string): boolean {
   return Boolean(config.baseUrl || config.apiProtocol || runtimeProviderKey !== config.type);
+}
+
+function resolvePrimaryModelProviderKey(
+  config: Pick<ProviderConfig, 'id' | 'type' | 'metadata'>,
+  runtimeProviderKey?: string,
+): string {
+  const explicit = config.metadata?.modelProviderKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return runtimeProviderKey || getOpenClawProviderKey(config.type, config.id);
 }
 
 export function getOpenClawProviderKey(type: string, providerId: string): string {
@@ -105,8 +117,11 @@ async function getBrowserOAuthRuntimeProvider(config: ProviderConfig): Promise<s
   return null;
 }
 
-export function getProviderModelRef(config: ProviderConfig): string | undefined {
-  const providerKey = getOpenClawProviderKey(config.type, config.id);
+export function getProviderModelRef(
+  config: ProviderConfig,
+  providerKeyOverride?: string,
+): string | undefined {
+  const providerKey = resolvePrimaryModelProviderKey(config, providerKeyOverride);
 
   if (config.model) {
     return config.model.startsWith(`${providerKey}/`)
@@ -129,7 +144,7 @@ export async function getProviderFallbackModelRefs(config: ProviderConfig): Prom
   const providerMap = new Map(allProviders.map((provider) => [provider.id, provider]));
   const seen = new Set<string>();
   const results: string[] = [];
-  const providerKey = getOpenClawProviderKey(config.type, config.id);
+  const providerKey = resolvePrimaryModelProviderKey(config);
 
   for (const fallbackModel of config.fallbackModels ?? []) {
     const normalizedModel = fallbackModel.trim();
@@ -273,6 +288,7 @@ async function syncProviderSecretToRuntime(
 
 async function resolveRuntimeSyncContext(config: ProviderConfig): Promise<RuntimeProviderSyncContext | null> {
   const runtimeProviderKey = await resolveRuntimeProviderKey(config);
+  const providerConfigKey = resolvePrimaryModelProviderKey(config, runtimeProviderKey);
   const meta = getProviderConfig(config.type);
   const api = config.apiProtocol || (config.type === 'custom' ? 'openai-completions' : meta?.api);
   if (!api) {
@@ -281,6 +297,7 @@ async function resolveRuntimeSyncContext(config: ProviderConfig): Promise<Runtim
 
   return {
     runtimeProviderKey,
+    providerConfigKey,
     meta,
     api,
   };
@@ -290,7 +307,7 @@ async function syncRuntimeProviderConfig(
   config: ProviderConfig,
   context: RuntimeProviderSyncContext,
 ): Promise<void> {
-  await syncProviderConfigToOpenClaw(context.runtimeProviderKey, config.model, {
+  await syncProviderConfigToOpenClaw(context.providerConfigKey, config.model, {
     baseUrl: normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api),
     api: context.api,
     apiKeyEnv: context.meta?.apiKeyEnv,
@@ -367,20 +384,21 @@ export async function syncUpdatedProviderToRuntime(
 
   const defaultProviderId = await getDefaultProvider();
   if (defaultProviderId === config.id) {
-    const modelOverride = config.model ? `${ock}/${config.model}` : undefined;
+    const providerConfigKey = context.providerConfigKey;
+    const modelOverride = getProviderModelRef(config, providerConfigKey);
     if (config.type !== 'custom') {
-      if (shouldUseExplicitDefaultOverride(config, ock)) {
-        await setOpenClawDefaultModelWithOverride(ock, modelOverride, {
+      if (shouldUseExplicitDefaultOverride(config, providerConfigKey)) {
+        await setOpenClawDefaultModelWithOverride(providerConfigKey, modelOverride, {
           baseUrl: normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api),
           api: context.api,
           apiKeyEnv: context.meta?.apiKeyEnv,
           headers: config.headers ?? context.meta?.headers,
         }, fallbackModels);
       } else {
-        await setOpenClawDefaultModel(ock, modelOverride, fallbackModels);
+        await setOpenClawDefaultModel(providerConfigKey, modelOverride, fallbackModels);
       }
     } else {
-      await setOpenClawDefaultModelWithOverride(ock, modelOverride, {
+      await setOpenClawDefaultModelWithOverride(providerConfigKey, modelOverride, {
         baseUrl: normalizeProviderBaseUrl(config, config.baseUrl, config.apiProtocol || 'openai-completions'),
         api: config.apiProtocol || 'openai-completions',
         headers: config.headers,
@@ -405,7 +423,11 @@ export async function syncDeletedProviderToRuntime(
   }
 
   const ock = runtimeProviderKey ?? await resolveRuntimeProviderKey({ ...provider, id: providerId });
+  const providerConfigKey = resolvePrimaryModelProviderKey({ ...provider, id: providerId }, ock);
   await removeProviderFromOpenClaw(ock);
+  if (providerConfigKey !== ock) {
+    await removeProviderFromOpenClaw(providerConfigKey);
+  }
 
   scheduleGatewayRefresh(
     gatewayManager,
@@ -424,7 +446,11 @@ export async function syncDeletedProviderApiKeyToRuntime(
   }
 
   const ock = runtimeProviderKey ?? await resolveRuntimeProviderKey({ ...provider, id: providerId });
+  const providerConfigKey = resolvePrimaryModelProviderKey({ ...provider, id: providerId }, ock);
   await removeProviderFromOpenClaw(ock);
+  if (providerConfigKey !== ock) {
+    await removeProviderFromOpenClaw(providerConfigKey);
+  }
 }
 
 export async function syncDefaultProviderToRuntime(
@@ -444,18 +470,17 @@ export async function syncDefaultProviderToRuntime(
   const isOAuthProvider = (oauthTypes.includes(provider.type) && !providerKey) || Boolean(browserOAuthRuntimeProvider);
 
   if (!isOAuthProvider) {
-    const modelOverride = provider.model
-      ? (provider.model.startsWith(`${ock}/`) ? provider.model : `${ock}/${provider.model}`)
-      : undefined;
+    const providerConfigKey = resolvePrimaryModelProviderKey(provider, ock);
+    const modelOverride = getProviderModelRef(provider, providerConfigKey);
 
     if (provider.type === 'custom') {
-      await setOpenClawDefaultModelWithOverride(ock, modelOverride, {
+      await setOpenClawDefaultModelWithOverride(providerConfigKey, modelOverride, {
         baseUrl: normalizeProviderBaseUrl(provider, provider.baseUrl, provider.apiProtocol || 'openai-completions'),
         api: provider.apiProtocol || 'openai-completions',
         headers: provider.headers,
       }, fallbackModels);
-    } else if (shouldUseExplicitDefaultOverride(provider, ock)) {
-      await setOpenClawDefaultModelWithOverride(ock, modelOverride, {
+    } else if (shouldUseExplicitDefaultOverride(provider, providerConfigKey)) {
+      await setOpenClawDefaultModelWithOverride(providerConfigKey, modelOverride, {
         baseUrl: normalizeProviderBaseUrl(
           provider,
           provider.baseUrl || getProviderConfig(provider.type)?.baseUrl,
@@ -466,7 +491,7 @@ export async function syncDefaultProviderToRuntime(
         headers: provider.headers ?? getProviderConfig(provider.type)?.headers,
       }, fallbackModels);
     } else {
-      await setOpenClawDefaultModel(ock, modelOverride, fallbackModels);
+      await setOpenClawDefaultModel(providerConfigKey, modelOverride, fallbackModels);
     }
 
     if (providerKey) {

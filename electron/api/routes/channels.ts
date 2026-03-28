@@ -44,11 +44,23 @@ import {
   startWeChatLoginSession,
   waitForWeChatLoginSession,
 } from '../../utils/wechat-login';
+import {
+  cancelFeishuAutoCreateSession,
+  startFeishuAutoCreateSession,
+  waitForFeishuAutoCreateSession,
+} from '../../utils/feishu-auto-create';
+import {
+  cancelQQBotAutoCreateSession,
+  startQQBotAutoCreateSession,
+  waitForQQBotAutoCreateSession,
+} from '../../utils/qq-auto-create';
 import { whatsAppLoginManager } from '../../utils/whatsapp-login';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
 const WECHAT_QR_TIMEOUT_MS = 8 * 60 * 1000;
+const FEISHU_QR_TIMEOUT_MS = 15 * 60 * 1000;
+const QQBOT_QR_TIMEOUT_MS = 10 * 60 * 1000;
 const activeQrLogins = new Map<string, string>();
 
 interface WebLoginStartResult {
@@ -158,6 +170,112 @@ async function awaitWeChatQrLogin(
       activeQrLogins.delete(loginKey);
     }
     await cancelWeChatLoginSession(sessionKey);
+  }
+}
+
+async function awaitFeishuAutoCreate(
+  ctx: HostApiContext,
+  sessionKey: string,
+  loginKey: string,
+  accountId?: string,
+): Promise<void> {
+  try {
+    const result = await waitForFeishuAutoCreateSession(sessionKey, {
+      timeoutMs: FEISHU_QR_TIMEOUT_MS,
+      onQrRefresh: async ({ qrcodeUrl }) => {
+        if (!isActiveQrLogin(loginKey, sessionKey)) {
+          return;
+        }
+        emitChannelEvent(ctx, 'feishu', 'qr', {
+          qr: qrcodeUrl,
+          raw: qrcodeUrl,
+          sessionKey,
+        });
+      },
+      onCredentialsReady: async ({ appId, appSecret, connectionMode }) => {
+        await saveChannelConfig('feishu', {
+          appId,
+          appSecret,
+          connectionMode,
+          enabled: true,
+        }, accountId);
+        await ensureScopedChannelBinding('feishu', accountId);
+        scheduleGatewayChannelSaveRefresh(ctx, 'feishu', `feishu:autoCreate:${accountId || 'default'}`);
+      },
+    });
+
+    if (!isActiveQrLogin(loginKey, sessionKey)) {
+      return;
+    }
+
+    emitChannelEvent(ctx, 'feishu', 'success', {
+      accountId: accountId || 'default',
+      appId: result.appId,
+      versionId: result.versionId,
+      unresolvedScopes: result.unresolvedScopes,
+    });
+  } catch (error) {
+    if (!isActiveQrLogin(loginKey, sessionKey)) {
+      return;
+    }
+    emitChannelEvent(ctx, 'feishu', 'error', String(error));
+  } finally {
+    if (isActiveQrLogin(loginKey, sessionKey)) {
+      activeQrLogins.delete(loginKey);
+    }
+    await cancelFeishuAutoCreateSession(sessionKey);
+  }
+}
+
+async function awaitQQBotAutoCreate(
+  ctx: HostApiContext,
+  sessionKey: string,
+  loginKey: string,
+  accountId?: string,
+): Promise<void> {
+  try {
+    const result = await waitForQQBotAutoCreateSession(sessionKey, {
+      timeoutMs: QQBOT_QR_TIMEOUT_MS,
+      onQrRefresh: async ({ qrcodeUrl }) => {
+        if (!isActiveQrLogin(loginKey, sessionKey)) {
+          return;
+        }
+        emitChannelEvent(ctx, 'qqbot', 'qr', {
+          qr: qrcodeUrl,
+          raw: qrcodeUrl,
+          sessionKey,
+        });
+      },
+      onCredentialsReady: async ({ appId, clientSecret }) => {
+        await saveChannelConfig('qqbot', {
+          appId,
+          clientSecret,
+          enabled: true,
+        }, accountId);
+        await ensureScopedChannelBinding('qqbot', accountId);
+        scheduleGatewayChannelSaveRefresh(ctx, 'qqbot', `qqbot:autoCreate:${accountId || 'default'}`);
+      },
+    });
+
+    if (!isActiveQrLogin(loginKey, sessionKey)) {
+      return;
+    }
+
+    emitChannelEvent(ctx, 'qqbot', 'success', {
+      accountId: accountId || 'default',
+      appId: result.appId,
+      developerId: result.developerId,
+    });
+  } catch (error) {
+    if (!isActiveQrLogin(loginKey, sessionKey)) {
+      return;
+    }
+    emitChannelEvent(ctx, 'qqbot', 'error', String(error));
+  } finally {
+    if (isActiveQrLogin(loginKey, sessionKey)) {
+      activeQrLogins.delete(loginKey);
+    }
+    await cancelQQBotAutoCreateSession(sessionKey);
   }
 }
 
@@ -510,6 +628,112 @@ export async function handleChannelRoutes(
       clearActiveQrLogin(UI_WECHAT_CHANNEL_TYPE, accountId);
       if (sessionKey) {
         await cancelWeChatLoginSession(sessionKey);
+      }
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/channels/feishu/start' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{
+        accountId?: string;
+        appName?: string;
+        appDescription?: string;
+      }>(req);
+      const requestedAccountId = body.accountId?.trim() || undefined;
+
+      const installResult = await ensureFeishuPluginInstalled();
+      if (!installResult.installed) {
+        sendJson(res, 500, { success: false, error: installResult.warning || 'Feishu plugin install failed' });
+        return true;
+      }
+
+      const startResult = await startFeishuAutoCreateSession({
+        appName: body.appName?.trim() || 'TnymaAI Bot',
+        appDescription: body.appDescription?.trim() || undefined,
+      });
+
+      const loginKey = setActiveQrLogin('feishu', startResult.sessionKey, requestedAccountId);
+      if (startResult.qrcodeUrl) {
+        emitChannelEvent(ctx, 'feishu', 'qr', {
+          qr: startResult.qrcodeUrl,
+          raw: startResult.qrcodeUrl,
+          sessionKey: startResult.sessionKey,
+        });
+      }
+      void awaitFeishuAutoCreate(ctx, startResult.sessionKey, loginKey, requestedAccountId);
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/channels/feishu/cancel' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ accountId?: string }>(req);
+      const accountId = body.accountId?.trim() || undefined;
+      const loginKey = buildQrLoginKey('feishu', accountId);
+      const sessionKey = activeQrLogins.get(loginKey);
+      clearActiveQrLogin('feishu', accountId);
+      if (sessionKey) {
+        await cancelFeishuAutoCreateSession(sessionKey);
+      }
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/channels/qqbot/start' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{
+        accountId?: string;
+        appName?: string;
+        appDescription?: string;
+      }>(req);
+      const requestedAccountId = body.accountId?.trim() || undefined;
+
+      const installResult = await ensureQQBotPluginInstalled();
+      if (!installResult.installed) {
+        sendJson(res, 500, { success: false, error: installResult.warning || 'QQ Bot plugin install failed' });
+        return true;
+      }
+
+      const startResult = await startQQBotAutoCreateSession({
+        appDescription: body.appDescription?.trim() || undefined,
+        appName: body.appName?.trim() || 'TnymaAI QQ Bot',
+      });
+
+      const loginKey = setActiveQrLogin('qqbot', startResult.sessionKey, requestedAccountId);
+      if (startResult.qrcodeUrl) {
+        emitChannelEvent(ctx, 'qqbot', 'qr', {
+          qr: startResult.qrcodeUrl,
+          raw: startResult.qrcodeUrl,
+          sessionKey: startResult.sessionKey,
+        });
+      }
+      void awaitQQBotAutoCreate(ctx, startResult.sessionKey, loginKey, requestedAccountId);
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/channels/qqbot/cancel' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ accountId?: string }>(req);
+      const accountId = body.accountId?.trim() || undefined;
+      const loginKey = buildQrLoginKey('qqbot', accountId);
+      const sessionKey = activeQrLogins.get(loginKey);
+      clearActiveQrLogin('qqbot', accountId);
+      if (sessionKey) {
+        await cancelQQBotAutoCreateSession(sessionKey);
       }
       sendJson(res, 200, { success: true });
     } catch (error) {

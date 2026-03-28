@@ -18,6 +18,12 @@ const HOST_EVENT_TO_IPC_CHANNEL: Record<string, string> = {
   'channel:wechat-qr': 'channel:wechat-qr',
   'channel:wechat-success': 'channel:wechat-success',
   'channel:wechat-error': 'channel:wechat-error',
+  'channel:feishu-qr': 'channel:feishu-qr',
+  'channel:feishu-success': 'channel:feishu-success',
+  'channel:feishu-error': 'channel:feishu-error',
+  'channel:qqbot-qr': 'channel:qqbot-qr',
+  'channel:qqbot-success': 'channel:qqbot-success',
+  'channel:qqbot-error': 'channel:qqbot-error',
 };
 
 function getEventSource(): EventSource {

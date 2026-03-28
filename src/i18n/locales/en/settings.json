@@ -52,6 +52,8 @@
       "replaceApiKeyHelp": "Leave this field empty if you want to keep the currently stored API key.",
       "baseUrl": "Base URL",
       "modelId": "Model ID",
+      "selectModel": "Select a model",
+      "refreshModels": "Sync models",
       "codePlanPreset": "Code Plan Preset",
       "codePlanMode": "Code Plan",
       "useCodePlanPreset": "Use Ark Code Plan Preset",
@@ -100,6 +102,8 @@
       "failedDefault": "Failed to set default",
       "updated": "Provider updated",
       "failedUpdate": "Failed to update provider",
+      "modelsLoaded": "Loaded {{count}} models",
+      "modelsLoadFailed": "Failed to load models: {{error}}",
       "invalidKey": "Invalid API key",
       "modelRequired": "Model ID is required",
       "minimaxConflict": "Cannot add both MiniMax (Global) and MiniMax (CN) providers."

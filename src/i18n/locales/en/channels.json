@@ -96,7 +96,21 @@
         "generateQRCode": "Generate QR Code",
         "updateAndReconnect": "Update & Reconnect",
         "saveAndConnect": "Save & Connect",
-        "envVar": "Environment Variable: {{var}}"
+        "envVar": "Environment Variable: {{var}}",
+        "feishuSetupMode": "Setup Mode",
+        "feishuAutoMode": "Auto Create via QR",
+        "feishuManualMode": "Manual App ID",
+        "feishuAutoHint": "After you confirm the QR login, TnymaAI will create the bot, grant permissions, subscribe events, and publish it automatically.",
+        "feishuManualHint": "If you already created the Feishu app yourself, enter the App ID and Secret directly.",
+        "feishuAutoNotice": "After QR login, TnymaAI will create and publish the Feishu bot automatically, then write the App ID and Secret back into this channel config.",
+        "feishuCreateAndScan": "Create Bot & Generate QR",
+        "qqbotSetupMode": "Setup Mode",
+        "qqbotAutoMode": "Auto Create via QR",
+        "qqbotManualMode": "Manual App ID",
+        "qqbotAutoHint": "After you confirm the QQ QR login, TnymaAI will create the bot automatically and write the App ID / Client Secret back into this channel config.",
+        "qqbotManualHint": "If you already created the QQ bot yourself, enter the App ID and Client Secret directly.",
+        "qqbotAutoNotice": "QQ bot creation does not require extra permission setup. After login, TnymaAI will create the bot and save the credentials automatically.",
+        "qqbotCreateAndScan": "Create QQ Bot & Generate QR"
     },
     "meta": {
         "telegram": {
@@ -218,6 +232,8 @@
         },
         "feishu": {
             "description": "Connect Feishu/Lark bot via WebSocket",
+            "autoDescription": "Sign in with Feishu QR to create the bot automatically, switch callback mode to long connection, grant permissions, and publish it under the current account",
+            "autoAppDescription": "Created by TnymaAI",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/GKn8wOvHnibpPNkNkPzcAvGlnzK#GdHUdp9t9oqyegxwV8ScLvVGn1c",
             "fields": {
                 "appId": {
@@ -234,6 +250,13 @@
                 "Create a new application",
                 "Get App ID and App Secret",
                 "Configure event subscription"
+            ],
+            "autoInstructions": [
+                "Click the button below to generate a Feishu login QR code",
+                "Scan it with the Feishu mobile app and confirm login",
+                "TnymaAI will create the bot app and read the App ID / App Secret automatically",
+                "It will then grant the required permissions, subscribe events, and switch callback mode to long connection",
+                "Finally, it will create the first version, publish it, and save the credentials into this channel config"
             ]
         },
         "wecom": {
@@ -369,6 +392,8 @@
         },
         "qqbot": {
             "description": "Connect QQ Bot via @sliverp/qqbot plugin",
+            "autoDescription": "Sign in with QQ via QR, create the bot automatically, and write the App ID / Client Secret back into the current account config",
+            "autoAppDescription": "Created by TnymaAI",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/KPIJwlyiGiupMrkiS9ice39Zn2c",
             "fields": {
                 "appId": {
@@ -380,6 +405,13 @@
                     "placeholder": "Your QQ Bot Client Secret"
                 }
             },
+            "autoInstructions": [
+                "Click the button below and TnymaAI will open the official QQ OpenClaw login page",
+                "Scan the QR code with mobile QQ and confirm the developer login",
+                "If the QR expires, TnymaAI refreshes it automatically",
+                "Once login succeeds, TnymaAI creates a new QQ bot automatically",
+                "After creation, the App ID and Client Secret are written back into this channel config"
+            ],
             "instructions": [
                 "Register an app at QQ Bot Open Platform",
                 "Get App ID and Client Secret",

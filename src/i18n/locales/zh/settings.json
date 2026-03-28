@@ -52,6 +52,8 @@
       "replaceApiKeyHelp": "如果想保留当前已保存的 API key，这里留空即可。",
       "baseUrl": "基础 URL",
       "modelId": "模型 ID",
+      "selectModel": "选择模型",
+      "refreshModels": "同步模型",
       "codePlanPreset": "Code Plan 预设",
       "codePlanMode": "Code Plan",
       "useCodePlanPreset": "使用 Ark Code Plan 预设",
@@ -100,6 +102,8 @@
       "failedDefault": "设置默认失败",
       "updated": "提供商已更新",
       "failedUpdate": "更新提供商失败",
+      "modelsLoaded": "已加载 {{count}} 个模型",
+      "modelsLoadFailed": "加载模型失败：{{error}}",
       "invalidKey": "无效的 API 密钥",
       "modelRequired": "需要模型 ID",
       "minimaxConflict": "不能同时添加 MiniMax 国际站和国内站的服务商。"

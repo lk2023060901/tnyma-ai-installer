@@ -19,6 +19,8 @@ import {
 } from '../../services/providers/provider-runtime-sync';
 import { validateApiKeyWithProvider } from '../../services/providers/provider-validation';
 import { getProviderService } from '../../services/providers/provider-service';
+import { listProviderModels } from '../../services/providers/provider-model-catalog';
+import { listUpstreamProviderAuthChoiceGroups } from '../../services/providers/provider-auth-choice-catalog';
 import { providerAccountToConfig } from '../../services/providers/provider-store';
 import type { ProviderAccount } from '../../shared/providers/types';
 import { logger } from '../../utils/logger';
@@ -52,6 +54,15 @@ export async function handleProviderRoutes(
 
   if (url.pathname === '/api/provider-vendors' && req.method === 'GET') {
     sendJson(res, 200, await providerService.listVendors());
+    return true;
+  }
+
+  if (url.pathname === '/api/provider-auth-choices' && req.method === 'GET') {
+    try {
+      sendJson(res, 200, { groups: await listUpstreamProviderAuthChoiceGroups() });
+    } catch (error) {
+      sendJson(res, 500, { groups: [], error: String(error) });
+    }
     return true;
   }
 
@@ -97,6 +108,16 @@ export async function handleProviderRoutes(
   if (url.pathname.startsWith('/api/provider-accounts/') && req.method === 'GET') {
     const accountId = decodeURIComponent(url.pathname.slice('/api/provider-accounts/'.length));
     sendJson(res, 200, await providerService.getAccount(accountId));
+    return true;
+  }
+
+  if (url.pathname.startsWith('/api/provider-models/') && req.method === 'GET') {
+    const accountId = decodeURIComponent(url.pathname.slice('/api/provider-models/'.length));
+    try {
+      sendJson(res, 200, { models: await listProviderModels(ctx.gatewayManager, accountId) });
+    } catch (error) {
+      sendJson(res, 500, { models: [], error: String(error) });
+    }
     return true;
   }
 

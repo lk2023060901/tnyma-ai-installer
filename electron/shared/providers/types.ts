@@ -4,11 +4,30 @@ export const PROVIDER_TYPES = [
   'google',
   'openrouter',
   'ark',
+  'volcengine',
+  'byteplus',
   'moonshot',
+  'moonshot-global',
+  'kimi-code',
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
   'qwen-portal',
+  'xai',
+  'mistral',
+  'kilocode',
+  'zai',
+  'qianfan',
+  'modelstudio',
+  'vercel-ai-gateway',
+  'xiaomi',
+  'synthetic',
+  'together',
+  'huggingface',
+  'venice',
+  'litellm',
+  'sglang',
+  'vllm',
   'ollama',
   'custom',
 ] as const;
@@ -19,11 +38,30 @@ export const BUILTIN_PROVIDER_TYPES = [
   'google',
   'openrouter',
   'ark',
+  'volcengine',
+  'byteplus',
   'moonshot',
+  'moonshot-global',
+  'kimi-code',
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
   'qwen-portal',
+  'xai',
+  'mistral',
+  'kilocode',
+  'zai',
+  'qianfan',
+  'modelstudio',
+  'vercel-ai-gateway',
+  'xiaomi',
+  'synthetic',
+  'together',
+  'huggingface',
+  'venice',
+  'litellm',
+  'sglang',
+  'vllm',
   'ollama',
 ] as const;
 
@@ -59,6 +97,7 @@ export interface ProviderConfig {
   model?: string;
   fallbackModels?: string[];
   fallbackProviderIds?: string[];
+  metadata?: ProviderAccount['metadata'];
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -129,6 +168,8 @@ export interface ProviderAccount {
     region?: string;
     email?: string;
     resourceUrl?: string;
+    authChoiceId?: string;
+    modelProviderKey?: string;
     customModels?: string[];
   };
   createdAt: string;

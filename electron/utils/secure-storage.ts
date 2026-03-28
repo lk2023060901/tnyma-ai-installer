@@ -38,6 +38,14 @@ export interface ProviderConfig {
   model?: string;
   fallbackModels?: string[];
   fallbackProviderIds?: string[];
+  metadata?: {
+    region?: string;
+    email?: string;
+    resourceUrl?: string;
+    authChoiceId?: string;
+    modelProviderKey?: string;
+    customModels?: string[];
+  };
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

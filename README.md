@@ -103,6 +103,7 @@ When you target another agent with `@agent`, TnymaAI switches into that agent's 
 
 ### 📡 Multi-Channel Management
 Configure and monitor multiple AI channels simultaneously. Each channel operates independently, allowing you to run specialized agents for different tasks.
+The Feishu channel now supports both manual App ID / App Secret entry and a QR-based auto-create flow that signs in, creates the bot, grants permissions, subscribes events, and publishes it from the Channels page. QQ Bot now also supports both manual App ID / Client Secret entry and a QR-based one-click bot creation flow from the same Channels UI.
 Each channel now supports multiple accounts, per-account agent binding, and switching the channel default account directly from the Channels page.
 TnymaAI now also bundles Tencent's official personal WeChat channel plugin, so you can link WeChat directly from the Channels page with an in-app QR flow.
 
@@ -121,6 +122,8 @@ Environment variables for bundled search skills:
 
 ### 🔐 Secure Provider Integration
 Connect to multiple AI providers (OpenAI, Anthropic, and more) with credentials stored securely in your system's native keychain. OpenAI supports both API key and browser OAuth (Codex subscription) sign-in.
+Provider setup now follows OpenClaw's upstream auth-choice catalog instead of a reduced local preset list, so the setup wizard and **Settings → AI Providers** expose the same provider entry points as stock OpenClaw wherever the desktop host bridge supports them.
+After an API key validates or an OAuth flow succeeds, TnymaAI immediately requests the provider's model catalog and stores the discovered model list on that account so you can switch models from the synced list instead of typing IDs manually.
 For **Custom** providers used with OpenAI-compatible gateways, you can set a custom `User-Agent` in **Settings → AI Providers → Edit Provider** for compatibility-sensitive endpoints.
 
 ### 🌙 Adaptive Theming
@@ -163,7 +166,7 @@ pnpm dev
 When you launch TnymaAI for the first time, the **Setup Wizard** will guide you through:
 
 1. **Language & Region** – Configure your preferred locale
-2. **AI Provider** – Add providers with API keys or OAuth (for providers that support browser/device login)
+2. **AI Provider** – Choose from OpenClaw's upstream provider auth choices, complete API key or OAuth verification, and sync the provider model list
 3. **Skill Bundles** – Select pre-configured skills for common use cases
 4. **Verification** – Test your configuration before entering the main interface
 

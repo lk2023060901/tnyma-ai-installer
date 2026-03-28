@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useChannelsStore } from '@/stores/channels';
 
 import { hostApiFetch } from '@/lib/host-api';
@@ -62,6 +63,11 @@ const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-[#eeece3] dar
 const labelClasses = 'text-[14px] text-foreground/80 font-bold';
 const outlineButtonClasses = 'h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground';
 const primaryButtonClasses = 'h-9 text-[13px] font-medium rounded-full px-4 shadow-none';
+type ManagedSetupMode = 'auto' | 'manual';
+
+function supportsAutoCreate(channelType: ChannelType | null): channelType is 'feishu' | 'qqbot' {
+  return channelType === 'feishu' || channelType === 'qqbot';
+}
 
 export function ChannelConfigModal({
   initialSelectedType = null,
@@ -88,6 +94,9 @@ export function ChannelConfigModal({
   const [validating, setValidating] = useState(false);
   const [loadingConfig, setLoadingConfig] = useState(false);
   const [isExistingConfig, setIsExistingConfig] = useState(false);
+  const [managedSetupMode, setManagedSetupMode] = useState<ManagedSetupMode>(() => (
+    supportsAutoCreate(initialSelectedType) && !initialConfigValues ? 'auto' : 'manual'
+  ));
   const firstInputRef = useRef<HTMLInputElement>(null);
   const [validationResult, setValidationResult] = useState<{
     valid: boolean;
@@ -96,7 +105,17 @@ export function ChannelConfigModal({
   } | null>(null);
 
   const meta: ChannelMeta | null = selectedType ? CHANNEL_META[selectedType] : null;
-  const shouldUseCredentialValidation = selectedType !== 'feishu';
+  const isAutoCreateManagedChannel = supportsAutoCreate(selectedType);
+  const shouldUseCredentialValidation = selectedType !== 'feishu' && selectedType !== 'qqbot';
+  const effectiveConnectionType = isAutoCreateManagedChannel && managedSetupMode === 'auto'
+    ? 'qr'
+    : meta?.connectionType;
+  const displayedDescription = isAutoCreateManagedChannel && managedSetupMode === 'auto'
+    ? t(`meta.${selectedType}.autoDescription`)
+    : (meta ? t(meta.description.replace('channels:', '')) : '');
+  const displayedInstructions = isAutoCreateManagedChannel && managedSetupMode === 'auto'
+    ? Array.from({ length: 5 }, (_, index) => `channels:meta.${selectedType}.autoInstructions.${index}`)
+    : (meta?.instructions ?? []);
   const usesManagedQrAccounts = usesPluginManagedQrAccounts(selectedType);
   const showAccountIdEditor = allowEditAccountId && !usesManagedQrAccounts;
   const resolvedAccountId = usesManagedQrAccounts
@@ -107,7 +126,22 @@ export function ChannelConfigModal({
 
   useEffect(() => {
     setSelectedType(initialSelectedType);
-  }, [initialSelectedType]);
+    if (supportsAutoCreate(initialSelectedType)) {
+      const hasInitialConfig = Boolean(initialConfigValues && Object.keys(initialConfigValues).length > 0);
+      setManagedSetupMode(hasInitialConfig ? 'manual' : 'auto');
+    }
+  }, [initialConfigValues, initialSelectedType]);
+
+  useEffect(() => {
+    if (!supportsAutoCreate(selectedType)) {
+      setManagedSetupMode('manual');
+      return;
+    }
+
+    if (isExistingConfig || (initialConfigValues && Object.keys(initialConfigValues).length > 0)) {
+      setManagedSetupMode('manual');
+    }
+  }, [initialConfigValues, isExistingConfig, selectedType]);
 
   useEffect(() => {
     setAccountIdInput(accountId || '');
@@ -234,7 +268,7 @@ export function ChannelConfigModal({
   }
 
   useEffect(() => {
-    if (!selectedType || meta?.connectionType !== 'qr') return;
+    if (!selectedType || effectiveConnectionType !== 'qr') return;
     const channelType = selectedType;
 
     const onQr = (...args: unknown[]) => {
@@ -295,7 +329,7 @@ export function ChannelConfigModal({
         body: JSON.stringify(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
       }).catch(() => { });
     };
-  }, [meta?.connectionType, resolvedAccountId, selectedType]);
+  }, [effectiveConnectionType, resolvedAccountId, selectedType]);
 
   const handleValidate = async () => {
     if (!selectedType || !shouldUseCredentialValidation) return;
@@ -361,15 +395,33 @@ export function ChannelConfigModal({
         }
       }
 
-      if (meta.connectionType === 'qr') {
+      if (effectiveConnectionType === 'qr') {
+        const startPayload: Record<string, string> = {};
+        if (resolvedAccountId) {
+          startPayload.accountId = resolvedAccountId;
+        }
+        if (selectedType === 'feishu') {
+          const nextAppName = channelName.trim();
+          startPayload.appName = nextAppName && nextAppName !== CHANNEL_NAMES[selectedType]
+            ? nextAppName
+            : 'TnymaAI Bot';
+          startPayload.appDescription = t('meta.feishu.autoAppDescription');
+        } else if (selectedType === 'qqbot') {
+          const nextAppName = channelName.trim();
+          startPayload.appName = nextAppName && nextAppName !== CHANNEL_NAMES[selectedType]
+            ? nextAppName
+            : 'TnymaAI QQ Bot';
+          startPayload.appDescription = t('meta.qqbot.autoAppDescription');
+        }
+
         await hostApiFetch(`/api/channels/${encodeURIComponent(selectedType)}/start`, {
           method: 'POST',
-          body: JSON.stringify(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+          body: JSON.stringify(startPayload),
         });
         return;
       }
 
-      if (meta.connectionType === 'token' && shouldUseCredentialValidation) {
+      if (effectiveConnectionType === 'token' && shouldUseCredentialValidation) {
         const validationResponse = await hostApiFetch<{
           success: boolean;
           valid?: boolean;
@@ -455,6 +507,9 @@ export function ChannelConfigModal({
 
   const isFormValid = () => {
     if (!meta) return false;
+    if (isAutoCreateManagedChannel && managedSetupMode === 'auto') {
+      return true;
+    }
     return meta.configFields
       .filter((field) => field.required)
       .every((field) => configValues[field.key]?.trim());
@@ -515,7 +570,10 @@ export function ChannelConfigModal({
                 return (
                   <button
                     key={type}
-                    onClick={() => setSelectedType(type)}
+                    onClick={() => {
+                      setSelectedType(type);
+                      setManagedSetupMode(supportsAutoCreate(type) ? 'auto' : 'manual');
+                    }}
                     className={cn(
                       'group flex items-start gap-4 p-4 rounded-2xl transition-all text-left border relative overflow-hidden bg-[#eeece3] dark:bg-muted shadow-sm',
                       isConfigured
@@ -542,7 +600,11 @@ export function ChannelConfigModal({
                         {t(channelMeta.description.replace('channels:', ''))}
                       </p>
                       <p className="text-[12px] font-medium text-muted-foreground/80 mt-2">
-                        {channelMeta.connectionType === 'qr' ? t('dialog.qrCode') : t('dialog.token')}
+                        {supportsAutoCreate(type)
+                          ? t(`dialog.${type}AutoMode`)
+                          : channelMeta.connectionType === 'qr'
+                            ? t('dialog.qrCode')
+                            : t('dialog.token')}
                       </p>
                     </div>
                     {isConfigured && (
@@ -600,7 +662,7 @@ export function ChannelConfigModal({
                   <div>
                     <p className={labelClasses}>{t('dialog.howToConnect')}</p>
                     <p className="text-[13px] text-muted-foreground mt-1">
-                      {meta ? t(meta.description.replace('channels:', '')) : ''}
+                      {displayedDescription}
                     </p>
                   </div>
                   <Button
@@ -614,11 +676,36 @@ export function ChannelConfigModal({
                   </Button>
                 </div>
                 <ol className="list-decimal pl-5 text-[13px] text-muted-foreground leading-relaxed space-y-1.5">
-                  {meta?.instructions.map((instruction, index) => (
+                  {displayedInstructions.map((instruction, index) => (
                     <li key={index}>{t(instruction)}</li>
                   ))}
                 </ol>
               </div>
+
+              {supportsAutoCreate(selectedType) && (
+                <div className="space-y-3">
+                  <Label className={labelClasses}>{t(`dialog.${selectedType}SetupMode`)}</Label>
+                  <Tabs
+                    value={managedSetupMode}
+                    onValueChange={(value) => setManagedSetupMode(value as ManagedSetupMode)}
+                    className="w-full"
+                  >
+                    <TabsList className="grid w-full grid-cols-2 rounded-2xl h-auto p-1 bg-[#eeece3] dark:bg-muted border border-black/10 dark:border-white/10">
+                      <TabsTrigger value="auto" className="rounded-xl py-2 text-[13px]">
+                        {t(`dialog.${selectedType}AutoMode`)}
+                      </TabsTrigger>
+                      <TabsTrigger value="manual" className="rounded-xl py-2 text-[13px]">
+                        {t(`dialog.${selectedType}ManualMode`)}
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <p className="text-[12px] text-muted-foreground">
+                    {managedSetupMode === 'auto'
+                      ? t(`dialog.${selectedType}AutoHint`)
+                      : t(`dialog.${selectedType}ManualHint`)}
+                  </p>
+                </div>
+              )}
 
               {showChannelName && (
                 <div className="space-y-2.5">
@@ -648,8 +735,14 @@ export function ChannelConfigModal({
                 </div>
               )}
 
+              {supportsAutoCreate(selectedType) && managedSetupMode === 'auto' && (
+                <div className="rounded-2xl border border-blue-500/20 bg-blue-500/10 p-4 text-[13px] text-blue-700 dark:text-blue-300">
+                  {t(`dialog.${selectedType}AutoNotice`)}
+                </div>
+              )}
+
               <div className="space-y-4">
-                {meta?.configFields.map((field) => (
+                {effectiveConnectionType === 'token' && meta?.configFields.map((field) => (
                   <ConfigField
                     key={field.key}
                     field={field}
@@ -713,7 +806,7 @@ export function ChannelConfigModal({
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-3 pt-2">
                 <div className="flex flex-col sm:flex-row gap-2">
-                  {meta?.connectionType === 'token' && shouldUseCredentialValidation && (
+                  {effectiveConnectionType === 'token' && shouldUseCredentialValidation && (
                     <Button
                       variant="outline"
                       onClick={handleValidate}
@@ -743,10 +836,12 @@ export function ChannelConfigModal({
                     {connecting ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {meta?.connectionType === 'qr' ? t('dialog.generatingQR') : t('dialog.validatingAndSaving')}
+                        {effectiveConnectionType === 'qr' ? t('dialog.generatingQR') : t('dialog.validatingAndSaving')}
                       </>
-                    ) : meta?.connectionType === 'qr' ? (
-                      t('dialog.generateQRCode')
+                    ) : effectiveConnectionType === 'qr' ? (
+                      supportsAutoCreate(selectedType)
+                        ? t(`dialog.${selectedType}CreateAndScan`)
+                        : t('dialog.generateQRCode')
                     ) : (
                       <>
                         <Check className="h-4 w-4 mr-2" />

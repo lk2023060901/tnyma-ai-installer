@@ -96,7 +96,21 @@
         "generateQRCode": "生成二维码",
         "updateAndReconnect": "更新并重新连接",
         "saveAndConnect": "保存并连接",
-        "envVar": "环境变量: {{var}}"
+        "envVar": "环境变量: {{var}}",
+        "feishuSetupMode": "接入方式",
+        "feishuAutoMode": "扫码自动创建",
+        "feishuManualMode": "手动填写 App ID",
+        "feishuAutoHint": "扫码确认后，系统会自动创建机器人、开通权限、订阅事件并发布。",
+        "feishuManualHint": "如果您已经在飞书开放平台准备好了应用凭证，可以直接手动填写。",
+        "feishuAutoNotice": "系统会在扫码登录后自动创建并发布飞书机器人，同时把 App ID 和 Secret 写回当前频道配置。",
+        "feishuCreateAndScan": "创建机器人并生成二维码",
+        "qqbotSetupMode": "接入方式",
+        "qqbotAutoMode": "扫码自动创建",
+        "qqbotManualMode": "手动填写 App ID",
+        "qqbotAutoHint": "扫码确认登录后，系统会自动创建 QQ 机器人并把 App ID / Client Secret 写回当前频道配置。",
+        "qqbotManualHint": "如果您已经在 QQ 机器人开放平台创建好机器人，可以直接手动填写 App ID 和 Client Secret。",
+        "qqbotAutoNotice": "QQ 机器人不需要额外开权限。扫码成功后系统会自动创建机器人并保存凭证。",
+        "qqbotCreateAndScan": "创建 QQ 机器人并生成二维码"
     },
     "meta": {
         "telegram": {
@@ -218,6 +232,8 @@
         },
         "feishu": {
             "description": "通过飞书官方推出的 OpenClaw 插件连接飞书/Lark 机器人",
+            "autoDescription": "扫码登录飞书后自动创建机器人、配置长连接回调、开通权限并发布到当前账号下",
+            "autoAppDescription": "Created by TnymaAI",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/GKn8wOvHnibpPNkNkPzcAvGlnzK#Py88dTltfoJc1jxAhIBcW3Pkn7b",
             "fields": {
                 "appId": {
@@ -235,6 +251,13 @@
                 "确保应用已开通“机器人”能力",
                 "保存配置后，根据网关提示扫码完成机器人创建",
                 "详细步骤请参考飞书官方文档"
+            ],
+            "autoInstructions": [
+                "点击下方按钮生成飞书登录二维码",
+                "使用飞书移动端扫码并确认登录",
+                "系统会自动创建机器人应用并获取 App ID / App Secret",
+                "随后会自动开通所需权限、订阅事件并切换为长连接回调",
+                "最后系统会自动创建版本并发布，然后把凭证写回当前频道配置"
             ]
         },
         "wecom": {
@@ -370,6 +393,8 @@
         },
         "qqbot": {
             "description": "通过 @sliverp/qqbot 插件连接 QQ 机器人",
+            "autoDescription": "扫码登录 QQ 后自动创建机器人，并将 App ID / Client Secret 写回当前账号配置",
+            "autoAppDescription": "Created by TnymaAI",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/KPIJwlyiGiupMrkiS9ice39Zn2c",
             "fields": {
                 "appId": {
@@ -381,6 +406,13 @@
                     "placeholder": "您的 QQ 机器人 Client Secret"
                 }
             },
+            "autoInstructions": [
+                "点击下方按钮后，TnymaAI 会打开 QQ 官方 OpenClaw 登录页并生成二维码",
+                "使用手机 QQ 扫码并确认登录开发者账号",
+                "二维码过期后系统会自动刷新，无需手动重新打开页面",
+                "登录成功后，系统会自动创建新的 QQ 机器人",
+                "创建完成后，App ID 和 Client Secret 会自动写回当前频道配置"
+            ],
             "instructions": [
                 "前往 QQ 机器人开放平台注册应用",
                 "获取 App ID 和 Client Secret",

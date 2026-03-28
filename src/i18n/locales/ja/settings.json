@@ -52,6 +52,8 @@
       "replaceApiKeyHelp": "現在保存されている API キーをそのまま使う場合は、この欄を空のままにしてください。",
       "baseUrl": "ベース URL",
       "modelId": "モデル ID",
+      "selectModel": "モデルを選択",
+      "refreshModels": "モデルを同期",
       "codePlanPreset": "Code Plan プリセット",
       "codePlanMode": "Code Plan",
       "useCodePlanPreset": "Ark Code Plan プリセットを使用",
@@ -100,6 +102,8 @@
       "failedDefault": "デフォルトの設定に失敗しました",
       "updated": "プロバイダーが更新されました",
       "failedUpdate": "プロバイダーの更新に失敗しました",
+      "modelsLoaded": "{{count}} 件のモデルを読み込みました",
+      "modelsLoadFailed": "モデルの読み込みに失敗しました: {{error}}",
       "invalidKey": "無効な API キー",
       "modelRequired": "モデル ID が必要です",
       "minimaxConflict": "MiniMax (Global) と MiniMax (CN) は同時に追加できません。"

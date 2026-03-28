@@ -14,6 +14,7 @@ const OPENCLAW_OAUTH_PLUGIN_PROVIDER_KEY_SET = new Set<string>(OPENCLAW_OAUTH_PL
 
 const PROVIDER_KEY_ALIASES: Record<string, string> = {
   'minimax-portal-cn': OPENCLAW_PROVIDER_KEY_MINIMAX,
+  'moonshot-global': OPENCLAW_PROVIDER_KEY_MOONSHOT,
 };
 
 export function getOpenClawProviderKeyForType(type: string, providerId: string): string {

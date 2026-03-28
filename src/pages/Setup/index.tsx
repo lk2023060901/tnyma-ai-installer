@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSettingsStore } from '@/stores/settings';
@@ -95,7 +96,6 @@ import {
   getProviderDocsUrl,
   getProviderIconUrl,
   resolveProviderApiKeyForSave,
-  resolveProviderModelForSave,
   shouldInvertInDark,
   shouldShowProviderModelId,
 } from '@/lib/providers';
@@ -105,6 +105,19 @@ import {
   hasConfiguredCredentials,
   pickPreferredAccount,
 } from '@/lib/provider-accounts';
+import {
+  getStoredProviderModels,
+  syncProviderModelsToAccount,
+  type ProviderModelCatalogEntry,
+} from '@/lib/provider-models';
+import {
+  fetchProviderAuthChoiceGroups,
+  flattenSupportedProviderChoices,
+  getSupportedProviderChoiceDisplayLabel,
+  resolveProviderChoiceFromAccount,
+  resolveProviderOAuthStartPayload,
+  type SupportedProviderChoice,
+} from '@/lib/provider-auth-choices';
 import appIcon from '@/assets/logo.svg';
 
 // Use the shared provider registry for setup providers
@@ -801,13 +814,17 @@ function ProviderContent({
   const [validating, setValidating] = useState(false);
   const [keyValid, setKeyValid] = useState<boolean | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [activeAccount, setActiveAccount] = useState<ProviderAccount | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
   const [apiProtocol, setApiProtocol] = useState<ProviderAccount['apiProtocol']>('openai-completions');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
-
-  const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('oauth');
+  const [availableModels, setAvailableModels] = useState<ProviderModelCatalogEntry[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [supportedChoices, setSupportedChoices] = useState<SupportedProviderChoice[]>([]);
+  const [choicesLoading, setChoicesLoading] = useState(false);
+  const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null);
   const [arkMode, setArkMode] = useState<'apikey' | 'codeplan'>('apikey');
 
   // OAuth Flow State
@@ -825,6 +842,97 @@ function ProviderContent({
   const [manualCodeInput, setManualCodeInput] = useState('');
   const [oauthError, setOauthError] = useState<string | null>(null);
   const pendingOAuthRef = useRef<{ accountId: string; label: string } | null>(null);
+  const selectedChoiceRef = useRef<SupportedProviderChoice | null>(null);
+
+  const selectedChoice = useMemo(
+    () => supportedChoices.find((choice) => choice.id === selectedChoiceId) ?? null,
+    [selectedChoiceId, supportedChoices],
+  );
+  const selectedProviderData = providers.find(
+    (provider) => provider.id === (selectedChoice?.vendorId ?? selectedProvider),
+  );
+  const providerDocsUrl = getProviderDocsUrl(selectedProviderData, i18n.language);
+  const effectiveProviderDocsUrl = selectedProvider === 'ark' && arkMode === 'codeplan'
+    ? (selectedProviderData?.codePlanDocsUrl || providerDocsUrl)
+    : providerDocsUrl;
+  const selectedProviderIconUrl = selectedProviderData
+    ? getProviderIconUrl(selectedProviderData.id)
+    : undefined;
+  const showBaseUrlField = selectedProviderData?.showBaseUrl ?? false;
+  const showModelIdField = shouldShowProviderModelId(selectedProviderData, devModeUnlocked);
+  const codePlanPreset = selectedProviderData?.codePlanPresetBaseUrl && selectedProviderData?.codePlanPresetModelId
+    ? {
+      baseUrl: selectedProviderData.codePlanPresetBaseUrl,
+      modelId: selectedProviderData.codePlanPresetModelId,
+    }
+    : null;
+  const hasDiscoveredModels = availableModels.length > 0;
+  const useOAuthFlow = selectedChoice?.authMode === 'oauth_browser'
+    || selectedChoice?.authMode === 'oauth_device';
+  const requiresApiKey = selectedChoice?.authMode === 'api_key'
+    && (selectedProviderData?.requiresApiKey ?? true);
+  const resolvedApiProtocol = selectedChoice?.apiProtocol
+    || ((selectedProviderData?.id === 'custom' || selectedProviderData?.id === 'ollama')
+      ? apiProtocol
+      : undefined);
+  const effectiveModelId = (() => {
+    const trimmedModelId = modelId.trim();
+    if (trimmedModelId) {
+      return trimmedModelId;
+    }
+    return selectedChoice?.defaultModelId || selectedProviderData?.defaultModelId || undefined;
+  })();
+
+  useEffect(() => {
+    selectedChoiceRef.current = selectedChoice;
+  }, [selectedChoice]);
+
+  const refreshProviderModels = useCallback(async (accountId: string, defaultModelId?: string) => {
+    setModelsLoading(true);
+    try {
+      const { models, selectedModelId } = await syncProviderModelsToAccount({
+        accountId,
+        defaultModelId,
+      });
+      setAvailableModels(models);
+      if (selectedModelId) {
+        setModelId(selectedModelId);
+      }
+      toast.success(t('settings:aiProviders.toast.modelsLoaded', { count: models.length }));
+    } catch (error) {
+      console.error('Failed to refresh provider models:', error);
+      toast.error(t('settings:aiProviders.toast.modelsLoadFailed', { error: String(error) }));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setChoicesLoading(true);
+      try {
+        const groups = await fetchProviderAuthChoiceGroups();
+        const choices = flattenSupportedProviderChoices(groups);
+        if (!cancelled) {
+          setSupportedChoices(choices);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load provider auth choices:', error);
+          toast.error(String(error));
+          setSupportedChoices([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setChoicesLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Manage OAuth events
   useEffect(() => {
@@ -855,20 +963,59 @@ function ProviderContent({
 
       const payload = (data as { accountId?: string } | undefined) || undefined;
       const accountId = payload?.accountId || pendingOAuthRef.current?.accountId;
+      const latestChoice = selectedChoiceRef.current;
 
       if (accountId) {
         try {
+          const existingAccount = await hostApiFetch<ProviderAccount | null>(
+            `/api/provider-accounts/${encodeURIComponent(accountId)}`,
+          );
+          if (latestChoice) {
+            const updates: Partial<ProviderAccount> = {
+              metadata: {
+                ...(existingAccount?.metadata ?? {}),
+                authChoiceId: latestChoice.id,
+                ...(latestChoice.modelProviderKey
+                  ? { modelProviderKey: latestChoice.modelProviderKey }
+                  : {}),
+              },
+            };
+            if (latestChoice.apiProtocol && !existingAccount?.apiProtocol) {
+              updates.apiProtocol = latestChoice.apiProtocol;
+            }
+            if (latestChoice.headers && !existingAccount?.headers) {
+              updates.headers = latestChoice.headers;
+            }
+            if (latestChoice.defaultBaseUrl && !existingAccount?.baseUrl) {
+              updates.baseUrl = latestChoice.defaultBaseUrl;
+            }
+            if (latestChoice.defaultModelId && !existingAccount?.model) {
+              updates.model = latestChoice.defaultModelId;
+            }
+            await hostApiFetch(`/api/provider-accounts/${encodeURIComponent(accountId)}`, {
+              method: 'PUT',
+              body: JSON.stringify({ updates }),
+            });
+          }
           await hostApiFetch('/api/provider-accounts/default', {
             method: 'PUT',
             body: JSON.stringify({ accountId }),
           });
           setSelectedAccountId(accountId);
+          setActiveAccount(await hostApiFetch<ProviderAccount | null>(
+            `/api/provider-accounts/${encodeURIComponent(accountId)}`,
+          ));
+          await refreshProviderModels(accountId, latestChoice?.defaultModelId);
         } catch (error) {
           console.error('Failed to set default provider account:', error);
         }
       }
 
       pendingOAuthRef.current = null;
+      if (latestChoice) {
+        setSelectedChoiceId(latestChoice.id);
+        onSelectProvider(latestChoice.vendorId);
+      }
       onConfiguredChange(true);
       toast.success(t('provider.valid'));
     };
@@ -888,19 +1035,25 @@ function ProviderContent({
       offSuccess();
       offError();
     };
-  }, [onConfiguredChange, t]);
+  }, [onConfiguredChange, onSelectProvider, refreshProviderModels, t]);
 
   const handleStartOAuth = async () => {
-    if (!selectedProvider) return;
+    if (!selectedChoice) return;
+
+    const oauthPayload = resolveProviderOAuthStartPayload(selectedChoice);
+    if (!oauthPayload) {
+      toast.error(t('provider.invalid'));
+      return;
+    }
 
     try {
       const snapshot = await fetchProviderSnapshot();
       const existingVendorIds = new Set(snapshot.accounts.map((account) => account.vendorId));
-      if (selectedProvider === 'minimax-portal' && existingVendorIds.has('minimax-portal-cn')) {
+      if (selectedChoice.vendorId === 'minimax-portal' && existingVendorIds.has('minimax-portal-cn')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
         return;
       }
-      if (selectedProvider === 'minimax-portal-cn' && existingVendorIds.has('minimax-portal')) {
+      if (selectedChoice.vendorId === 'minimax-portal-cn' && existingVendorIds.has('minimax-portal')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
         return;
       }
@@ -916,15 +1069,20 @@ function ProviderContent({
     try {
       const snapshot = await fetchProviderSnapshot();
       const accountId = buildProviderAccountId(
-        selectedProvider as ProviderType,
+        selectedChoice.vendorId,
         selectedAccountId,
         snapshot.vendors,
       );
-      const label = selectedProviderData?.name || selectedProvider;
+      const label = getSupportedProviderChoiceDisplayLabel(selectedChoice);
       pendingOAuthRef.current = { accountId, label };
       await hostApiFetch('/api/providers/oauth/start', {
         method: 'POST',
-        body: JSON.stringify({ provider: selectedProvider, accountId, label }),
+        body: JSON.stringify({
+          provider: oauthPayload.provider,
+          region: oauthPayload.region,
+          accountId,
+          label,
+        }),
       });
     } catch (e) {
       setOauthError(String(e));
@@ -971,18 +1129,32 @@ function ProviderContent({
           || setupCandidates.find((account) => hasConfiguredCredentials(account, statusMap.get(account.id)))
           || setupCandidates[0];
         if (preferred && !cancelled) {
+          const restoredChoiceId = resolveProviderChoiceFromAccount(preferred);
           onSelectProvider(preferred.vendorId);
           setSelectedAccountId(preferred.id);
+          setActiveAccount(preferred);
+          setSelectedChoiceId(restoredChoiceId);
           const typeInfo = providers.find((p) => p.id === preferred.vendorId);
-          const requiresKey = typeInfo?.requiresApiKey ?? false;
+          const restoredChoice = supportedChoices.find((choice) => choice.id === restoredChoiceId) ?? null;
+          const requiresKey = restoredChoice?.authMode === 'api_key'
+            && (typeInfo?.requiresApiKey ?? true);
           onConfiguredChange(!requiresKey || hasConfiguredCredentials(preferred, statusMap.get(preferred.id)));
           const storedKey = (await hostApiFetch<{ apiKey: string | null }>(
             `/api/providers/${encodeURIComponent(preferred.id)}/api-key`,
           )).apiKey;
           onApiKeyChange(storedKey || '');
+          setAvailableModels(getStoredProviderModels(preferred));
+          setBaseUrl(preferred.baseUrl || restoredChoice?.defaultBaseUrl || typeInfo?.defaultBaseUrl || '');
+          setModelId(preferred.model || restoredChoice?.defaultModelId || typeInfo?.defaultModelId || '');
+          setApiProtocol(preferred.apiProtocol || restoredChoice?.apiProtocol || 'openai-completions');
         } else if (!cancelled) {
+          setSelectedChoiceId(null);
+          onSelectProvider(null);
+          setSelectedAccountId(null);
           onConfiguredChange(false);
           onApiKeyChange('');
+          setAvailableModels([]);
+          setActiveAccount(null);
         }
       } catch (error) {
         if (!cancelled) {
@@ -991,13 +1163,18 @@ function ProviderContent({
       }
     })();
     return () => { cancelled = true; };
-  }, [onApiKeyChange, onConfiguredChange, onSelectProvider, providers]);
+  }, [onApiKeyChange, onConfiguredChange, onSelectProvider, providers, supportedChoices]);
 
   // When provider changes, load stored key + reset base URL
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!selectedProvider) return;
+      if (!selectedChoice) {
+        setSelectedAccountId(null);
+        setActiveAccount(null);
+        setAvailableModels([]);
+        return;
+      }
       setApiProtocol('openai-completions');
       try {
         const snapshot = await fetchProviderSnapshot();
@@ -1005,29 +1182,40 @@ function ProviderContent({
         const preferredAccount = pickPreferredAccount(
           snapshot.accounts,
           snapshot.defaultAccountId,
-          selectedProvider,
+          selectedChoice.vendorId,
           statusMap,
         );
-        const accountIdForLoad = preferredAccount?.id || selectedProvider;
+        const accountIdForLoad = preferredAccount?.id || selectedChoice.vendorId;
+        const preferredChoiceId = preferredAccount
+          ? resolveProviderChoiceFromAccount(preferredAccount)
+          : null;
+        const sameChoiceAccount = preferredChoiceId === selectedChoice.id;
         setSelectedAccountId(preferredAccount?.id || null);
+        setActiveAccount(preferredAccount ?? null);
 
-        const savedProvider = await hostApiFetch<{ baseUrl?: string; model?: string; apiProtocol?: ProviderAccount['apiProtocol'] } | null>(
-          `/api/providers/${encodeURIComponent(accountIdForLoad)}`,
-        );
         const storedKey = (await hostApiFetch<{ apiKey: string | null }>(
           `/api/providers/${encodeURIComponent(accountIdForLoad)}/api-key`,
         )).apiKey;
         if (!cancelled) {
-          onApiKeyChange(storedKey || '');
+          onApiKeyChange(sameChoiceAccount ? (storedKey || '') : '');
+          setAvailableModels(sameChoiceAccount ? getStoredProviderModels(preferredAccount) : []);
 
-          const info = providers.find((p) => p.id === selectedProvider);
-          const nextBaseUrl = savedProvider?.baseUrl || info?.defaultBaseUrl || '';
-          const nextModelId = savedProvider?.model || info?.defaultModelId || '';
+          const info = providers.find((p) => p.id === selectedChoice.vendorId);
+          const nextBaseUrl = sameChoiceAccount
+            ? (preferredAccount?.baseUrl || selectedChoice.defaultBaseUrl || info?.defaultBaseUrl || '')
+            : (selectedChoice.defaultBaseUrl || info?.defaultBaseUrl || '');
+          const nextModelId = sameChoiceAccount
+            ? (preferredAccount?.model || selectedChoice.defaultModelId || info?.defaultModelId || '')
+            : (selectedChoice.defaultModelId || info?.defaultModelId || '');
           setBaseUrl(nextBaseUrl);
           setModelId(nextModelId);
-          setApiProtocol(savedProvider?.apiProtocol || 'openai-completions');
+          setApiProtocol(
+            (sameChoiceAccount ? preferredAccount?.apiProtocol : undefined)
+            || selectedChoice.apiProtocol
+            || 'openai-completions',
+          );
           if (
-            selectedProvider === 'ark'
+            selectedChoice.vendorId === 'ark'
             && info?.codePlanPresetBaseUrl
             && info?.codePlanPresetModelId
             && nextBaseUrl.trim() === info.codePlanPresetBaseUrl
@@ -1045,7 +1233,7 @@ function ProviderContent({
       }
     })();
     return () => { cancelled = true; };
-  }, [onApiKeyChange, selectedProvider, providers]);
+  }, [onApiKeyChange, providers, selectedChoice]);
 
   useEffect(() => {
     if (!providerMenuOpen) return;
@@ -1070,38 +1258,17 @@ function ProviderContent({
     };
   }, [providerMenuOpen]);
 
-  const selectedProviderData = providers.find((p) => p.id === selectedProvider);
-  const providerDocsUrl = getProviderDocsUrl(selectedProviderData, i18n.language);
-  const effectiveProviderDocsUrl = selectedProvider === 'ark' && arkMode === 'codeplan'
-    ? (selectedProviderData?.codePlanDocsUrl || providerDocsUrl)
-    : providerDocsUrl;
-  const selectedProviderIconUrl = selectedProviderData
-    ? getProviderIconUrl(selectedProviderData.id)
-    : undefined;
-  const showBaseUrlField = selectedProviderData?.showBaseUrl ?? false;
-  const showModelIdField = shouldShowProviderModelId(selectedProviderData, devModeUnlocked);
-  const codePlanPreset = selectedProviderData?.codePlanPresetBaseUrl && selectedProviderData?.codePlanPresetModelId
-    ? {
-      baseUrl: selectedProviderData.codePlanPresetBaseUrl,
-      modelId: selectedProviderData.codePlanPresetModelId,
-    }
-    : null;
-  const requiresKey = selectedProviderData?.requiresApiKey ?? false;
-  const isOAuth = selectedProviderData?.isOAuth ?? false;
-  const supportsApiKey = selectedProviderData?.supportsApiKey ?? false;
-  const useOAuthFlow = isOAuth && (!supportsApiKey || authMode === 'oauth');
-
   const handleValidateAndSave = async () => {
-    if (!selectedProvider) return;
+    if (!selectedChoice) return;
 
     try {
       const snapshot = await fetchProviderSnapshot();
       const existingVendorIds = new Set(snapshot.accounts.map((account) => account.vendorId));
-      if (selectedProvider === 'minimax-portal' && existingVendorIds.has('minimax-portal-cn')) {
+      if (selectedChoice.vendorId === 'minimax-portal' && existingVendorIds.has('minimax-portal-cn')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
         return;
       }
-      if (selectedProvider === 'minimax-portal-cn' && existingVendorIds.has('minimax-portal')) {
+      if (selectedChoice.vendorId === 'minimax-portal-cn' && existingVendorIds.has('minimax-portal')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
         return;
       }
@@ -1113,18 +1280,20 @@ function ProviderContent({
     setKeyValid(null);
 
     try {
-      // Validate key if the provider requires one and a key was entered
-      const isApiKeyRequired = requiresKey || (supportsApiKey && authMode === 'apikey');
-      if (isApiKeyRequired && apiKey) {
+      if (requiresApiKey && !apiKey.trim()) {
+        toast.error(t('provider.invalid'));
+        setValidating(false);
+        return;
+      }
+
+      if (requiresApiKey && apiKey.trim() && !selectedChoice.skipValidation) {
         const result = await invokeIpc(
           'provider:validateKey',
-          selectedAccountId || selectedProvider,
+          selectedAccountId || selectedChoice.vendorId,
           apiKey,
           {
             baseUrl: baseUrl.trim() || undefined,
-            apiProtocol: (selectedProvider === 'custom' || selectedProvider === 'ollama')
-              ? apiProtocol
-              : undefined,
+            apiProtocol: resolvedApiProtocol,
           }
         ) as { valid: boolean; error?: string };
 
@@ -1139,35 +1308,38 @@ function ProviderContent({
         setKeyValid(true);
       }
 
-      const effectiveModelId = resolveProviderModelForSave(
-        selectedProviderData,
-        modelId,
-        devModeUnlocked
-      );
+      if ((showModelIdField || hasDiscoveredModels) && !effectiveModelId) {
+        toast.error(t('settings:aiProviders.toast.modelRequired'));
+        setValidating(false);
+        return;
+      }
+
       const snapshot = await fetchProviderSnapshot();
       const accountIdForSave = buildProviderAccountId(
-        selectedProvider as ProviderType,
+        selectedChoice.vendorId,
         selectedAccountId,
         snapshot.vendors,
       );
 
-      const effectiveApiKey = resolveProviderApiKeyForSave(selectedProvider, apiKey);
+      const effectiveApiKey = resolveProviderApiKeyForSave(selectedChoice.vendorId, apiKey);
       const accountPayload: ProviderAccount = {
         id: accountIdForSave,
-        vendorId: selectedProvider as ProviderType,
-        label: selectedProvider === 'custom'
-          ? t('settings:aiProviders.custom')
-          : (selectedProviderData?.name || selectedProvider),
-        authMode: selectedProvider === 'ollama'
-          ? 'local'
-          : 'api_key',
-        baseUrl: baseUrl.trim() || undefined,
-        apiProtocol: (selectedProvider === 'custom' || selectedProvider === 'ollama')
-          ? apiProtocol
-          : undefined,
+        vendorId: selectedChoice.vendorId as ProviderType,
+        label: getSupportedProviderChoiceDisplayLabel(selectedChoice),
+        authMode: selectedChoice.authMode,
+        baseUrl: baseUrl.trim() || selectedChoice.defaultBaseUrl || undefined,
+        apiProtocol: resolvedApiProtocol,
+        headers: selectedChoice.headers,
         model: effectiveModelId,
         enabled: true,
         isDefault: false,
+        metadata: {
+          ...(activeAccount?.metadata ?? {}),
+          authChoiceId: selectedChoice.id,
+          ...(selectedChoice.modelProviderKey
+            ? { modelProviderKey: selectedChoice.modelProviderKey }
+            : {}),
+        },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -1183,8 +1355,10 @@ function ProviderContent({
                 authMode: accountPayload.authMode,
                 baseUrl: accountPayload.baseUrl,
                 apiProtocol: accountPayload.apiProtocol,
+                headers: accountPayload.headers,
                 model: accountPayload.model,
                 enabled: accountPayload.enabled,
+                metadata: accountPayload.metadata,
               },
               apiKey: effectiveApiKey,
             }),
@@ -1212,6 +1386,8 @@ function ProviderContent({
       }
 
       setSelectedAccountId(accountIdForSave);
+      setActiveAccount(accountPayload);
+      await refreshProviderModels(accountIdForSave, effectiveModelId || selectedChoice.defaultModelId);
       onConfiguredChange(true);
       toast.success(t('provider.valid'));
     } catch (error) {
@@ -1224,22 +1400,32 @@ function ProviderContent({
   };
 
   // Can the user submit?
-  const isApiKeyRequired = requiresKey || (supportsApiKey && authMode === 'apikey');
   const canSubmit =
-    selectedProvider
-    && (isApiKeyRequired ? apiKey.length > 0 : true)
-    && (showModelIdField ? modelId.trim().length > 0 : true)
+    selectedChoice
+    && (requiresApiKey ? apiKey.trim().length > 0 : true)
+    && ((showModelIdField || hasDiscoveredModels) ? Boolean(effectiveModelId) : true)
     && !useOAuthFlow;
 
-  const handleSelectProvider = (providerId: string) => {
-    onSelectProvider(providerId);
+  const handleSelectProviderChoice = (choice: SupportedProviderChoice) => {
+    const typeInfo = providers.find((provider) => provider.id === choice.vendorId);
+    onSelectProvider(choice.vendorId);
+    setSelectedChoiceId(choice.id);
     setSelectedAccountId(null);
+    setActiveAccount(null);
     onConfiguredChange(false);
     onApiKeyChange('');
     setKeyValid(null);
+    setShowKey(false);
     setProviderMenuOpen(false);
-    setAuthMode('oauth');
     setArkMode('apikey');
+    setAvailableModels([]);
+    setBaseUrl(choice.defaultBaseUrl || typeInfo?.defaultBaseUrl || '');
+    setModelId(choice.defaultModelId || typeInfo?.defaultModelId || '');
+    setApiProtocol(choice.apiProtocol || 'openai-completions');
+    setOauthFlowing(false);
+    setOauthData(null);
+    setManualCodeInput('');
+    setOauthError(null);
   };
 
   return (
@@ -1248,7 +1434,7 @@ function ProviderContent({
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <Label>{t('provider.label')}</Label>
-          {selectedProvider && effectiveProviderDocsUrl && (
+          {selectedChoice && effectiveProviderDocsUrl && (
             <a
               href={effectiveProviderDocsUrl}
               target="_blank"
@@ -1271,9 +1457,10 @@ function ProviderContent({
               'flex items-center justify-between gap-2',
               'focus:outline-none focus:ring-2 focus:ring-ring'
             )}
+            disabled={choicesLoading}
           >
             <div className="flex items-center gap-2 min-w-0">
-              {selectedProvider && selectedProviderData ? (
+              {selectedChoice && selectedProviderData ? (
                 selectedProviderIconUrl ? (
                   <img
                     src={selectedProviderIconUrl}
@@ -1286,10 +1473,12 @@ function ProviderContent({
               ) : (
                 <span className="text-xs text-muted-foreground shrink-0">—</span>
               )}
-              <span className={cn('truncate text-left', !selectedProvider && 'text-muted-foreground')}>
-                {selectedProviderData
-                  ? `${selectedProviderData.id === 'custom' ? t('settings:aiProviders.custom') : selectedProviderData.name}${selectedProviderData.model ? ` — ${selectedProviderData.model}` : ''}`
-                  : t('provider.selectPlaceholder')}
+              <span className={cn('truncate text-left', !selectedChoice && 'text-muted-foreground')}>
+                {selectedChoice
+                  ? getSupportedProviderChoiceDisplayLabel(selectedChoice)
+                  : choicesLoading
+                    ? 'Loading provider choices...'
+                    : t('provider.selectPlaceholder')}
               </span>
             </div>
             <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform', providerMenuOpen && 'rotate-180')} />
@@ -1300,17 +1489,18 @@ function ProviderContent({
               role="listbox"
               className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover shadow-md max-h-64 overflow-auto"
             >
-              {providers.map((p) => {
-                const iconUrl = getProviderIconUrl(p.id);
-                const isSelected = selectedProvider === p.id;
+              {supportedChoices.map((choice) => {
+                const iconUrl = getProviderIconUrl(choice.vendorId);
+                const isSelected = selectedChoiceId === choice.id;
+                const choiceProvider = providers.find((provider) => provider.id === choice.vendorId);
 
                 return (
                   <button
-                    key={p.id}
+                    key={choice.id}
                     type="button"
                     role="option"
                     aria-selected={isSelected}
-                    onClick={() => handleSelectProvider(p.id)}
+                    onClick={() => handleSelectProviderChoice(choice)}
                     className={cn(
                       'w-full px-3 py-2 text-left text-sm flex items-center justify-between gap-2',
                       'hover:bg-accent transition-colors',
@@ -1321,13 +1511,18 @@ function ProviderContent({
                       {iconUrl ? (
                         <img
                           src={iconUrl}
-                          alt={p.name}
-                          className={cn('h-4 w-4 shrink-0', shouldInvertInDark(p.id) && 'dark:invert')}
+                          alt={choice.groupLabel}
+                          className={cn('h-4 w-4 shrink-0', shouldInvertInDark(choice.vendorId) && 'dark:invert')}
                         />
                       ) : (
-                        <span className="text-sm leading-none shrink-0">{p.icon}</span>
+                        <span className="text-sm leading-none shrink-0">{choiceProvider?.icon ?? '•'}</span>
                       )}
-                      <span className="truncate">{p.id === 'custom' ? t('settings:aiProviders.custom') : p.name}{p.model ? ` — ${p.model}` : ''}</span>
+                      <div className="min-w-0">
+                        <p className="truncate">{getSupportedProviderChoiceDisplayLabel(choice)}</p>
+                        {choice.hint && (
+                          <p className="truncate text-xs text-muted-foreground">{choice.hint}</p>
+                        )}
+                      </div>
                     </div>
                     {isSelected && <Check className="h-4 w-4 text-primary shrink-0" />}
                   </button>
@@ -1339,9 +1534,9 @@ function ProviderContent({
       </div>
 
       {/* Dynamic config fields based on selected provider */}
-      {selectedProvider && (
+      {selectedChoice && (
         <motion.div
-          key={selectedProvider}
+          key={selectedChoice.id}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           className="space-y-4"
@@ -1427,29 +1622,61 @@ function ProviderContent({
             </div>
           )}
 
-          {/* Model ID field (for siliconflow etc.) */}
-          {showModelIdField && (
+          {/* Model ID field (static or discovered from gateway) */}
+          {(showModelIdField || hasDiscoveredModels) && (
             <div className="space-y-2">
-              <Label htmlFor="modelId">{t('provider.modelId')}</Label>
-              <Input
-                id="modelId"
-                type="text"
-                placeholder={selectedProviderData?.modelIdPlaceholder || 'e.g. deepseek-ai/DeepSeek-V3'}
-                value={modelId}
-                onChange={(e) => {
-                  setModelId(e.target.value);
-                  onConfiguredChange(false);
-                }}
-                autoComplete="off"
-                className="bg-background border-input"
-              />
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="modelId">{t('provider.modelId')}</Label>
+                {selectedAccountId && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => refreshProviderModels(selectedAccountId, selectedProviderData?.defaultModelId)}
+                    disabled={modelsLoading}
+                  >
+                    {modelsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    <span className="ml-1">{t('settings:aiProviders.dialog.refreshModels')}</span>
+                  </Button>
+                )}
+              </div>
+              {hasDiscoveredModels ? (
+                <Select
+                  id="modelId"
+                  value={modelId}
+                  onChange={(e) => {
+                    setModelId(e.target.value);
+                    onConfiguredChange(false);
+                  }}
+                  className="bg-background border-input"
+                >
+                  <option value="" disabled>{t('settings:aiProviders.dialog.selectModel')}</option>
+                  {availableModels.map((model) => (
+                    <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  id="modelId"
+                  type="text"
+                  placeholder={selectedProviderData?.modelIdPlaceholder || 'e.g. deepseek-ai/DeepSeek-V3'}
+                  value={modelId}
+                  onChange={(e) => {
+                    setModelId(e.target.value);
+                    onConfiguredChange(false);
+                  }}
+                  autoComplete="off"
+                  className="bg-background border-input"
+                />
+              )}
               <p className="text-xs text-muted-foreground">
                 {t('provider.modelIdDesc')}
               </p>
             </div>
           )}
 
-          {selectedProvider === 'custom' && (
+          {selectedChoice.vendorId === 'custom' && (
             <div className="space-y-2">
               <Label>{t('provider.protocol')}</Label>
               <div className="flex gap-2 text-sm">
@@ -1502,32 +1729,8 @@ function ProviderContent({
             </div>
           )}
 
-          {/* Auth mode toggle for providers supporting both */}
-          {isOAuth && supportsApiKey && (
-            <div className="flex rounded-lg border overflow-hidden text-sm">
-              <button
-                onClick={() => setAuthMode('oauth')}
-                className={cn(
-                  'flex-1 py-2 px-3 transition-colors',
-                  authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
-                )}
-              >
-                {t('settings:aiProviders.oauth.loginMode')}
-              </button>
-              <button
-                onClick={() => setAuthMode('apikey')}
-                className={cn(
-                  'flex-1 py-2 px-3 transition-colors',
-                  authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
-                )}
-              >
-                {t('settings:aiProviders.oauth.apikeyMode')}
-              </button>
-            </div>
-          )}
-
           {/* API Key field (hidden for ollama) */}
-          {(!isOAuth || (supportsApiKey && authMode === 'apikey')) && (
+          {requiresApiKey && (
             <div className="space-y-2">
               <Label htmlFor="apiKey">{t('provider.apiKey')}</Label>
               <div className="relative">
@@ -1693,7 +1896,7 @@ function ProviderContent({
             {validating ? (
               <Loader2 className="h-4 w-4 animate-spin mr-2" />
             ) : null}
-            {requiresKey ? t('provider.validateSave') : t('provider.save')}
+            {requiresApiKey ? t('provider.validateSave') : t('provider.save')}
           </Button>
 
           {keyValid !== null && (

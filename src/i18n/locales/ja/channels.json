@@ -96,7 +96,21 @@
         "generateQRCode": "QRコードを生成",
         "updateAndReconnect": "更新して再接続",
         "saveAndConnect": "保存して接続",
-        "envVar": "環境変数: {{var}}"
+        "envVar": "環境変数: {{var}}",
+        "feishuSetupMode": "接続方法",
+        "feishuAutoMode": "QRで自動作成",
+        "feishuManualMode": "App ID を手動入力",
+        "feishuAutoHint": "QR ログインを確認すると、TnymaAI がボット作成、権限付与、イベント購読、公開まで自動で進めます。",
+        "feishuManualHint": "すでに Feishu Open Platform でアプリを作成済みなら、App ID と Secret を直接入力できます。",
+        "feishuAutoNotice": "QR ログイン後、TnymaAI が Feishu ボットを自動で作成・公開し、App ID と Secret をこのチャンネル設定へ書き戻します。",
+        "feishuCreateAndScan": "ボットを作成して QR を生成",
+        "qqbotSetupMode": "接続方法",
+        "qqbotAutoMode": "QRで自動作成",
+        "qqbotManualMode": "App ID を手動入力",
+        "qqbotAutoHint": "QQ の QR ログインを確認すると、TnymaAI がボットを自動作成し、App ID / Client Secret をこのチャンネル設定へ書き戻します。",
+        "qqbotManualHint": "すでに QQ ボットを作成済みなら、App ID と Client Secret を直接入力できます。",
+        "qqbotAutoNotice": "QQ ボットは追加の権限設定が不要です。ログイン成功後、TnymaAI がボットを作成して認証情報を保存します。",
+        "qqbotCreateAndScan": "QQ ボットを作成して QR を生成"
     },
     "meta": {
         "telegram": {
@@ -218,6 +232,8 @@
         },
         "feishu": {
             "description": "WebSocket 経由で Feishu/Lark ボットに接続します",
+            "autoDescription": "Feishu の QR ログイン後にボットを自動作成し、長接続コールバックへ切り替え、権限付与と公開まで現在のアカウント配下で完了します",
+            "autoAppDescription": "Created by TnymaAI",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/GKn8wOvHnibpPNkNkPzcAvGlnzK#GdHUdp9t9oqyegxwV8ScLvVGn1c",
             "fields": {
                 "appId": {
@@ -234,6 +250,13 @@
                 "新しいアプリケーションを作成します",
                 "App ID と App Secret を取得します",
                 "イベント購読を設定します"
+            ],
+            "autoInstructions": [
+                "下のボタンを押して Feishu ログイン用 QR コードを生成します",
+                "Feishu モバイルアプリでスキャンしてログインを承認します",
+                "TnymaAI がボットアプリを自動作成し、App ID / App Secret を取得します",
+                "その後、必要な権限付与、イベント購読、長接続コールバックへの切り替えを自動で行います",
+                "最後に初回バージョンを作成・公開し、資格情報をこのチャンネル設定へ保存します"
             ]
         },
         "wecom": {
@@ -369,6 +392,8 @@
         },
         "qqbot": {
             "description": "@sliverp/qqbot プラグイン経由で QQ ボットに接続します",
+            "autoDescription": "QQ に QR ログインしてボットを自動作成し、App ID / Client Secret を現在のアカウント設定へ書き戻します",
+            "autoAppDescription": "Created by TnymaAI",
             "fields": {
                 "appId": {
                     "label": "App ID",
@@ -379,6 +404,13 @@
                     "placeholder": "QQ ボットの Client Secret"
                 }
             },
+            "autoInstructions": [
+                "下のボタンを押すと、TnymaAI が QQ 公式 OpenClaw ログインページを開きます",
+                "スマホ版 QQ で QR コードを読み取り、開発者ログインを確認します",
+                "QR が期限切れになっても、TnymaAI が自動で再生成します",
+                "ログイン成功後、TnymaAI が新しい QQ ボットを自動で作成します",
+                "作成が完了すると、App ID と Client Secret がこのチャンネル設定へ自動反映されます"
+            ],
             "instructions": [
                 "QQ ボットオープンプラットフォームでアプリを登録します",
                 "App ID と Client Secret を取得します",
