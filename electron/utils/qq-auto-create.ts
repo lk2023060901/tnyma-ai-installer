@@ -1,16 +1,21 @@
+import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { BrowserContext, Page, Response as PlaywrightResponse } from 'playwright-core';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { deflateSync } from 'node:zlib';
+import type { Cookie, Session } from 'electron';
+import { getOpenClawResolvedDir } from './paths';
+import { buildElectronProxyConfig } from './proxy';
 import { proxyAwareFetch } from './proxy-fetch';
+import { getAllSettings } from './store';
 
 const QQ_BASE_URL = 'https://q.qq.com';
 const QQ_BOT_BASE_URL = 'https://bot.q.qq.com';
 const QQ_LOGIN_URL = `${QQ_BASE_URL}/qqbot/openclaw/login.html`;
 const QQ_INDEX_URL = `${QQ_BASE_URL}/qqbot/openclaw/index.html`;
+const QQ_ENTITY_PICKER_URL = `${QQ_BASE_URL}/qqbot/openclaw/entity-picker.html`;
 const QQ_CREATE_SESSION_URL = `${QQ_BASE_URL}/lite/create_session`;
 const QQ_POLL_URL = `${QQ_BASE_URL}/lite/poll`;
 const QQ_CREATE_BOT_URL = `${QQ_BOT_BASE_URL}/cgi-bin/lite_create`;
@@ -26,18 +31,23 @@ const QQ_POLL_REJECTED = 4;
 const FIRST_QR_TIMEOUT_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 8 * 60_000;
 const SESSION_TIMEOUT_MS = 10 * 60_000;
-const QR_CAPTURE_DELAY_MS = 400;
-const QR_CAPTURE_RETRIES = 8;
+const QQ_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_APP_DESCRIPTION = 'Created by TnymaAI';
 const QQ_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 const SESSION_EVENT_QR = 'qr';
 const SESSION_EVENT_PROGRESS = 'progress';
+const require = createRequire(import.meta.url);
 
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;
   reject: (error: unknown) => void;
+};
+
+type QrRenderDeps = {
+  QRCode: typeof import('qrcode-terminal/vendor/QRCode/index.js');
+  QRErrorCorrectLevel: typeof import('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js');
 };
 
 type SessionQrPayload = {
@@ -49,7 +59,7 @@ export type AutoCreateProgressPayload = {
   stepId: string;
 };
 
-type QQBotCookieCredentials = {
+type QQBotRequestContext = {
   bkn: string;
   cookieString: string;
   developerId: string;
@@ -58,6 +68,12 @@ type QQBotCookieCredentials = {
 type QQBotCreateResponse = {
   appid?: string;
   client_secret?: string;
+};
+
+type QQBotCreateSessionResponse = {
+  code?: number;
+  message?: string;
+  session_id?: string;
 };
 
 type QQBotUploadAvatarResponse = {
@@ -108,6 +124,8 @@ export type QQBotAutoCreateResult = {
   name: string;
 };
 
+let qrRenderDeps: QrRenderDeps | null = null;
+
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -144,52 +162,163 @@ function normalizeBotDescription(value: string | null | undefined): string {
   return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_APP_DESCRIPTION;
 }
 
-function findChromeExecutable(): string {
-  const envPath = process.env.CHROME_PATH?.trim();
-  const candidates = [
-    envPath,
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-    '/usr/bin/microsoft-edge',
-    '/usr/bin/microsoft-edge-stable',
-  ];
+function getQrRenderDeps(): QrRenderDeps {
+  if (qrRenderDeps) {
+    return qrRenderDeps;
+  }
 
-  for (const candidate of candidates) {
-    if (candidate && existsSync(candidate)) {
-      return candidate;
+  const openclawRequire = createRequire(join(getOpenClawResolvedDir(), 'package.json'));
+  const qrcodeTerminalPath = dirname(openclawRequire.resolve('qrcode-terminal/package.json'));
+  qrRenderDeps = {
+    QRCode: require(join(qrcodeTerminalPath, 'vendor', 'QRCode', 'index.js')),
+    QRErrorCorrectLevel: require(join(qrcodeTerminalPath, 'vendor', 'QRCode', 'QRErrorCorrectLevel.js')),
+  };
+  return qrRenderDeps;
+}
+
+function createQrMatrix(input: string) {
+  const { QRCode, QRErrorCorrectLevel } = getQrRenderDeps();
+  const qr = new QRCode(-1, QRErrorCorrectLevel.L);
+  qr.addData(input);
+  qr.make();
+  return qr;
+}
+
+function fillPixel(
+  buf: Buffer,
+  x: number,
+  y: number,
+  width: number,
+  r: number,
+  g: number,
+  b: number,
+  a = 255,
+) {
+  const idx = (y * width + x) * 4;
+  buf[idx] = r;
+  buf[idx + 1] = g;
+  buf[idx + 2] = b;
+  buf[idx + 3] = a;
+}
+
+function crcTable() {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+}
+
+const CRC_TABLE = crcTable();
+
+function crc32(buf: Buffer) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer) {
+  const typeBuf = Buffer.from(type, 'ascii');
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = crc32(Buffer.concat([typeBuf, data]));
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc, 0);
+  return Buffer.concat([len, typeBuf, data, crcBuf]);
+}
+
+function encodePngRgba(buffer: Buffer, width: number, height: number) {
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let row = 0; row < height; row += 1) {
+    const rawOffset = row * (stride + 1);
+    raw[rawOffset] = 0;
+    buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
+  }
+  const compressed = deflateSync(raw);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  return Buffer.concat([
+    signature,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', compressed),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+async function renderQrPngDataUrl(
+  input: string,
+  opts: { scale?: number; marginModules?: number } = {},
+): Promise<string> {
+  const { scale = 6, marginModules = 4 } = opts;
+  const qr = createQrMatrix(input);
+  const modules = qr.getModuleCount();
+  const size = (modules + marginModules * 2) * scale;
+  const buf = Buffer.alloc(size * size * 4, 255);
+
+  for (let row = 0; row < modules; row += 1) {
+    for (let col = 0; col < modules; col += 1) {
+      if (!qr.isDark(row, col)) continue;
+      const startX = (col + marginModules) * scale;
+      const startY = (row + marginModules) * scale;
+      for (let y = 0; y < scale; y += 1) {
+        const pixelY = startY + y;
+        for (let x = 0; x < scale; x += 1) {
+          const pixelX = startX + x;
+          fillPixel(buf, pixelX, pixelY, size, 0, 0, 0, 255);
+        }
+      }
     }
   }
 
-  throw new Error('Chrome or Edge was not found. Set CHROME_PATH or install Chrome first.');
+  const png = encodePngRgba(buf, size, size);
+  return `data:image/png;base64,${png.toString('base64')}`;
 }
 
-function getAvatarCandidates(): string[] {
-  const candidates = [
-    join(process.cwd(), 'resources', 'icons', 'icon.png'),
-    join(process.resourcesPath || '', 'resources', 'icons', 'icon.png'),
-    join(process.resourcesPath || '', 'icons', 'icon.png'),
-  ];
-  return Array.from(new Set(candidates.filter(Boolean)));
-}
-
-async function readDefaultAvatar(): Promise<Buffer> {
-  for (const candidate of getAvatarCandidates()) {
-    if (!candidate || !existsSync(candidate)) continue;
-    return await readFile(candidate);
+async function createRequestSession(partition: string): Promise<Session> {
+  if (!process.versions.electron) {
+    throw new Error('QQ bot auto-create requires Electron main-process networking.');
   }
-  throw new Error('Could not find the default TnymaAI icon for QQ bot creation.');
+
+  const { session } = await import('electron');
+  const requestSession = session.fromPartition(partition, { cache: false });
+  const appSettings = await getAllSettings().catch(() => null);
+  if (appSettings) {
+    await requestSession.setProxy(buildElectronProxyConfig(appSettings)).catch(() => {});
+  }
+  return requestSession;
 }
 
-function buildCookieStringFromContextCookies(cookies: Array<{ name: string; value: string }>): string {
+function buildRequestHeaders(referer: string, contentType = 'application/json'): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json, text/plain, */*',
+    Origin: QQ_BASE_URL,
+    Referer: referer,
+    'User-Agent': QQ_USER_AGENT,
+  };
+
+  if (contentType) {
+    headers['Content-Type'] = contentType;
+  }
+
+  return headers;
+}
+
+function buildCookieStringFromCookies(cookies: Cookie[]): string {
   return cookies
     .filter((cookie) => cookie.name && cookie.value !== undefined)
     .map((cookie) => `${cookie.name}=${cookie.value}`)
@@ -215,48 +344,6 @@ function buildMergedCookieString(primary: string, fallback: string): string {
     .join('; ');
 }
 
-function extractCookieValue(cookieString: string, name: string): string | null {
-  for (const pair of cookieString.split(';')) {
-    const trimmed = pair.trim();
-    if (!trimmed) continue;
-    const eqIndex = trimmed.indexOf('=');
-    if (eqIndex <= 0) continue;
-    const cookieName = trimmed.slice(0, eqIndex).trim();
-    if (cookieName !== name) continue;
-    return trimmed.slice(eqIndex + 1).trim();
-  }
-  return null;
-}
-
-function computeBkn(skey: string | null | undefined): string {
-  const value = skey ?? '';
-  let hash = 5381;
-  for (let index = 0; index < value.length; index += 1) {
-    hash += (hash << 5) + value.charCodeAt(index);
-  }
-  return String(hash & 0x7fffffff);
-}
-
-function buildRequestHeaders(
-  creds: QQBotCookieCredentials,
-  referer: string,
-  contentType = 'application/json',
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json, text/plain, */*',
-    Cookie: creds.cookieString,
-    Origin: QQ_BASE_URL,
-    Referer: referer,
-    'User-Agent': QQ_USER_AGENT,
-  };
-
-  if (contentType) {
-    headers['Content-Type'] = contentType;
-  }
-
-  return headers;
-}
-
 async function parseJsonResponse<T>(response: globalThis.Response, label: string): Promise<QQBotApiEnvelope<T>> {
   const raw = await response.text();
   let payload: QQBotApiEnvelope<T>;
@@ -269,15 +356,29 @@ async function parseJsonResponse<T>(response: globalThis.Response, label: string
   return payload;
 }
 
+async function fetchWithSession(
+  networkSession: Session,
+  input: string,
+  init: RequestInit,
+): Promise<globalThis.Response> {
+  return await networkSession.fetch(input, {
+    ...init,
+    credentials: 'include',
+  });
+}
+
 async function postQqJson<T>(
-  creds: QQBotCookieCredentials,
+  ctx: QQBotRequestContext,
   url: string,
   body: Record<string, unknown>,
   referer: string,
 ): Promise<QQBotApiEnvelope<T>> {
-  const response = await proxyAwareFetch(`${url}?bkn=${encodeURIComponent(creds.bkn)}`, {
+  const response = await proxyAwareFetch(`${url}?bkn=${encodeURIComponent(ctx.bkn)}`, {
     body: JSON.stringify(body),
-    headers: buildRequestHeaders(creds, referer),
+    headers: {
+      ...buildRequestHeaders(referer),
+      Cookie: ctx.cookieString,
+    },
     method: 'POST',
   });
 
@@ -288,9 +389,22 @@ async function postQqJson<T>(
   return await parseJsonResponse<T>(response, url);
 }
 
-async function createQqBot(creds: QQBotCookieCredentials): Promise<{ appId: string; clientSecret: string }> {
+async function getQqJson<T>(networkSession: Session, url: string, referer: string): Promise<QQBotApiEnvelope<T>> {
+  const response = await fetchWithSession(networkSession, url, {
+    headers: buildRequestHeaders(referer, ''),
+    method: 'GET',
+  });
+
+  if (!response.ok) {
+    throw new Error(`QQ request failed with ${response.status} for ${url}`);
+  }
+
+  return await parseJsonResponse<T>(response, url);
+}
+
+async function createQqBot(ctx: QQBotRequestContext): Promise<{ appId: string; clientSecret: string }> {
   const payload = await postQqJson<QQBotCreateResponse>(
-    creds,
+    ctx,
     QQ_CREATE_BOT_URL,
     {
       apply_source: 1,
@@ -315,16 +429,19 @@ async function createQqBot(creds: QQBotCookieCredentials): Promise<{ appId: stri
   return { appId, clientSecret };
 }
 
-async function uploadDefaultAvatar(creds: QQBotCookieCredentials): Promise<QQBotUploadAvatarResponse | null> {
+async function uploadDefaultAvatar(ctx: QQBotRequestContext): Promise<QQBotUploadAvatarResponse | null> {
   try {
     const avatar = await readDefaultAvatar();
     const form = new FormData();
     form.set('file', new Blob([avatar], { type: 'image/png' }), 'avatar.png');
     form.set('type', '0');
 
-    const response = await proxyAwareFetch(`${QQ_UPLOAD_AVATAR_URL}?bkn=${encodeURIComponent(creds.bkn)}`, {
+    const response = await proxyAwareFetch(`${QQ_UPLOAD_AVATAR_URL}?bkn=${encodeURIComponent(ctx.bkn)}`, {
       body: form,
-      headers: buildRequestHeaders(creds, QQ_INDEX_URL, ''),
+      headers: {
+        ...buildRequestHeaders(QQ_INDEX_URL, ''),
+        Cookie: ctx.cookieString,
+      },
       method: 'POST',
     });
 
@@ -350,7 +467,7 @@ async function uploadDefaultAvatar(creds: QQBotCookieCredentials): Promise<QQBot
 }
 
 async function modifyQqBotProfile(
-  creds: QQBotCookieCredentials,
+  ctx: QQBotRequestContext,
   appId: string,
   name: string,
   desc: string,
@@ -368,7 +485,7 @@ async function modifyQqBotProfile(
   }
 
   const response = await postQqJson<Record<string, never>>(
-    creds,
+    ctx,
     QQ_MODIFY_BOT_URL,
     payload,
     QQ_INDEX_URL,
@@ -382,93 +499,89 @@ async function modifyQqBotProfile(
   }
 }
 
-async function captureQrDataUrl(page: Page): Promise<string | null> {
-  const dataUrl = await page.evaluate(() => {
-    const candidates = [
-      '.mobile-login-box__qrcode canvas',
-      '.mobile-login-box__qrcode svg',
-      '.mobile-login-box__qrcode img',
-      '.mobile-login-box__qrcode-container canvas',
-      '.mobile-login-box__qrcode-container svg',
-      '[class*="qrcode"] canvas',
-      '[class*="qrcode"] svg',
-      '[class*="qrcode"] img',
-    ];
-
-    for (const selector of candidates) {
-      const node = document.querySelector(selector);
-      if (!node) continue;
-
-      if (node instanceof HTMLCanvasElement && node.width >= 64 && node.height >= 64) {
-        return node.toDataURL('image/png');
-      }
-
-      if (node instanceof SVGElement) {
-        const serialized = new XMLSerializer().serializeToString(node);
-        if (!serialized) continue;
-        return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(serialized)))}`;
-      }
-
-      if (node instanceof HTMLImageElement && node.src) {
-        return node.src;
-      }
-    }
-
-    return null;
-  });
-
-  if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image')) {
-    return dataUrl;
+function computeBkn(skey: string | null | undefined): string {
+  const value = skey ?? '';
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash += (hash << 5) + value.charCodeAt(index);
   }
-
-  const screenshotSelectors = [
-    '.mobile-login-box__qrcode',
-    '.mobile-login-box__qrcode-container',
-    '[class*="qrcode"]',
-  ];
-
-  for (const selector of screenshotSelectors) {
-    try {
-      const locator = page.locator(selector).first();
-      await locator.waitFor({ state: 'visible', timeout: 1_500 });
-      const box = await locator.boundingBox();
-      if (!box || box.width < 64 || box.height < 64) {
-        continue;
-      }
-      const buffer = await locator.screenshot({ type: 'png' });
-      return `data:image/png;base64,${buffer.toString('base64')}`;
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
+  return String(hash & 0x7fffffff);
 }
 
-async function captureQrDataUrlWithRetry(page: Page, attempts = QR_CAPTURE_RETRIES, delayMs = 250): Promise<string | null> {
-  for (let index = 0; index < attempts; index += 1) {
-    const qrcodeUrl = await captureQrDataUrl(page);
-    if (qrcodeUrl) {
-      return qrcodeUrl;
-    }
-    if (index < attempts - 1) {
-      await delay(delayMs);
-    }
-  }
-  return null;
+function buildQrRawValue(sessionId: string): string {
+  return `${QQ_ENTITY_PICKER_URL}?session_id=${encodeURIComponent(sessionId)}&_wv=16777218`;
 }
 
-async function captureCredentials(context: BrowserContext, developerId: string): Promise<QQBotCookieCredentials> {
+async function primeLoginSession(networkSession: Session): Promise<void> {
+  await fetchWithSession(networkSession, QQ_LOGIN_URL, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'User-Agent': QQ_USER_AGENT,
+    },
+    method: 'GET',
+  }).catch(() => {});
+}
+
+async function createLoginSession(networkSession: Session): Promise<{ qrcodeUrl: string; sessionId: string }> {
+  const payload = await getQqJson<QQBotCreateSessionResponse>(
+    networkSession,
+    `${QQ_CREATE_SESSION_URL}?bkn=${encodeURIComponent(QQ_DEFAULT_BKN)}`,
+    QQ_LOGIN_URL,
+  );
+
+  if (payload.retcode !== 0) {
+    throw new Error(payload.msg || `QQ login session creation failed with retcode ${String(payload.retcode ?? 'unknown')}.`);
+  }
+
+  const sessionCode = payload.data?.code;
+  const sessionId = payload.data?.session_id?.trim();
+  if (sessionCode !== 0 || !sessionId) {
+    throw new Error(payload.data?.message || 'QQ login session creation did not return a valid session_id.');
+  }
+
+  return {
+    qrcodeUrl: await renderQrPngDataUrl(buildQrRawValue(sessionId)),
+    sessionId,
+  };
+}
+
+async function pollLoginSession(networkSession: Session, sessionId: string): Promise<QQBotLoginPollPayload> {
+  const payload = await getQqJson<QQBotLoginPollPayload>(
+    networkSession,
+    `${QQ_POLL_URL}?session_id=${encodeURIComponent(sessionId)}&bkn=${encodeURIComponent(QQ_DEFAULT_BKN)}`,
+    QQ_LOGIN_URL,
+  );
+
+  if (payload.retcode !== 0) {
+    throw new Error(payload.msg || `QQ login poll failed with retcode ${String(payload.retcode ?? 'unknown')}.`);
+  }
+
+  return payload.data ?? {};
+}
+
+async function getRelevantCookies(networkSession: Session): Promise<Cookie[]> {
+  const [qqCookies, qqBotCookies] = await Promise.all([
+    networkSession.cookies.get({ url: QQ_BASE_URL }),
+    networkSession.cookies.get({ url: QQ_BOT_BASE_URL }),
+  ]);
+
+  const merged = new Map<string, Cookie>();
+  for (const cookie of [...qqCookies, ...qqBotCookies]) {
+    merged.set(`${cookie.domain}|${cookie.path}|${cookie.name}`, cookie);
+  }
+  return Array.from(merged.values());
+}
+
+async function captureRequestContext(networkSession: Session, developerId: string): Promise<QQBotRequestContext> {
   const deadline = Date.now() + 15_000;
   let cookieString = '';
   let skey = '';
 
   while (Date.now() < deadline) {
-    const cookies = await context.cookies([QQ_BASE_URL, QQ_BOT_BASE_URL]);
-    cookieString = buildCookieStringFromContextCookies(cookies);
+    const cookies = await getRelevantCookies(networkSession);
+    cookieString = buildCookieStringFromCookies(cookies);
     skey = cookies.find((cookie) => cookie.name === 'skey')?.value?.trim()
       || cookies.find((cookie) => cookie.name === 'p_skey')?.value?.trim()
-      || extractCookieValue(cookieString, 'skey')
       || '';
 
     if (cookieString) {
@@ -479,8 +592,10 @@ async function captureCredentials(context: BrowserContext, developerId: string):
   }
 
   if (!cookieString) {
-    cookieString = `developer_id_lite=${developerId}`;
-  } else if (!cookieString.includes('developer_id_lite=')) {
+    throw new Error('Failed to capture QQ login cookies after QR confirmation.');
+  }
+
+  if (!cookieString.includes('developer_id_lite=')) {
     cookieString = buildMergedCookieString(`developer_id_lite=${developerId}`, cookieString);
   }
 
@@ -491,22 +606,36 @@ async function captureCredentials(context: BrowserContext, developerId: string):
   };
 }
 
+function getAvatarCandidates(): string[] {
+  const candidates = [
+    join(process.cwd(), 'resources', 'icons', 'icon.png'),
+    join(process.resourcesPath || '', 'resources', 'icons', 'icon.png'),
+    join(process.resourcesPath || '', 'icons', 'icon.png'),
+  ];
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function readDefaultAvatar(): Promise<Buffer> {
+  for (const candidate of getAvatarCandidates()) {
+    if (!candidate || !existsSync(candidate)) continue;
+    return await readFile(candidate);
+  }
+  throw new Error('Could not find the default TnymaAI icon for QQ bot creation.');
+}
+
 class QQBotAutoCreateSession extends EventEmitter {
   readonly sessionKey = randomUUID();
 
   private readonly completion = createDeferred<QQBotAutoCreateResult>();
   private readonly firstQr = createDeferred<string>();
-  private readonly loginSuccess = createDeferred<{ developerId: string }>();
   private readonly runPromise: Promise<void>;
-  private readonly tempUserDataDirPromise = mkdtemp(join(tmpdir(), 'tnyma-qq-auto-create-'));
   private cancelled = false;
   private closed = false;
-  private context: BrowserContext | null = null;
   private credentialsReadyHook: ((payload: QQBotCredentialsReadyPayload) => void | Promise<void>) | null = null;
   private firstQrDelivered = false;
   private latestQrDataUrl: string | null = null;
-  private page: Page | null = null;
-  private refreshInFlight: Promise<void> | null = null;
+  private networkSession: Session | null = null;
+  private readonly sessionPartition = `qq-auto-create:${this.sessionKey}`;
 
   constructor(private readonly options: QQBotAutoCreateStartOptions) {
     super();
@@ -588,36 +717,53 @@ class QQBotAutoCreateSession extends EventEmitter {
   private async run(): Promise<void> {
     this.publishProgress('waiting_for_scan', 'running');
 
-    const { chromium } = await import('playwright-core');
-    const executablePath = findChromeExecutable();
-    const userDataDir = await this.tempUserDataDirPromise;
+    this.networkSession = await createRequestSession(this.sessionPartition);
+    await primeLoginSession(this.networkSession);
 
-    this.context = await chromium.launchPersistentContext(userDataDir, {
-      executablePath,
-      headless: true,
-      viewport: { width: 960, height: 720 },
-      args: [
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-blink-features=AutomationControlled',
-      ],
-    });
+    let currentLogin = await createLoginSession(this.networkSession);
+    this.publishQr(currentLogin.qrcodeUrl);
 
-    this.page = this.context.pages()[0] ?? await this.context.newPage();
-    this.page.on('response', (response) => {
-      void this.handleResponse(response);
-    });
+    const loginDeadline = Date.now() + LOGIN_TIMEOUT_MS;
+    let developerId: string | null = null;
 
-    await this.page.goto(QQ_LOGIN_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
+    while (Date.now() < loginDeadline) {
+      if (this.cancelled) {
+        throw new Error('QQ login was cancelled.');
+      }
 
-    const { developerId } = await withTimeout(
-      this.loginSuccess.promise,
-      LOGIN_TIMEOUT_MS,
-      'Timed out waiting for QQ login confirmation.',
-    );
+      const payload = await pollLoginSession(this.networkSession, currentLogin.sessionId);
+      const code = payload.code;
+
+      switch (code) {
+        case QQ_POLL_SUCCESS: {
+          developerId = payload.developer_id?.trim() || null;
+          if (!developerId) {
+            throw new Error('QQ login succeeded but no developer ID was returned.');
+          }
+          break;
+        }
+        case QQ_POLL_EXPIRED:
+        case QQ_POLL_REJECTED:
+          this.publishProgress('waiting_for_scan', 'running');
+          currentLogin = await createLoginSession(this.networkSession);
+          this.publishQr(currentLogin.qrcodeUrl);
+          break;
+        case QQ_POLL_WAITING:
+        case QQ_POLL_SCANNED:
+        default:
+          break;
+      }
+
+      if (developerId) {
+        break;
+      }
+
+      await delay(QQ_POLL_INTERVAL_MS);
+    }
+
+    if (!developerId) {
+      throw new Error('Timed out waiting for QQ login confirmation.');
+    }
 
     if (this.cancelled) {
       throw new Error('QQ login was cancelled.');
@@ -626,26 +772,30 @@ class QQBotAutoCreateSession extends EventEmitter {
     this.publishProgress('waiting_for_scan', 'completed');
     this.publishProgress('creating_bot', 'running');
 
-    await this.context.addCookies([{
-      name: 'developer_id_lite',
-      value: developerId,
+    await this.networkSession.cookies.set({
       domain: '.q.qq.com',
+      expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
+      name: 'developer_id_lite',
       path: '/',
-      expires: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
-      httpOnly: false,
+      sameSite: 'lax',
       secure: true,
-      sameSite: 'Lax',
-    }]).catch(() => {});
-
-    await this.page.goto(QQ_INDEX_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
+      url: QQ_BASE_URL,
+      value: developerId,
     }).catch(() => {});
 
-    const creds = await captureCredentials(this.context, developerId);
+    await fetchWithSession(this.networkSession, QQ_INDEX_URL, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        Referer: QQ_LOGIN_URL,
+        'User-Agent': QQ_USER_AGENT,
+      },
+      method: 'GET',
+    }).catch(() => {});
+
+    const requestContext = await captureRequestContext(this.networkSession, developerId);
     const name = normalizeBotName(this.options.appName);
     const desc = normalizeBotDescription(this.options.appDescription);
-    const { appId, clientSecret } = await createQqBot(creds);
+    const { appId, clientSecret } = await createQqBot(requestContext);
     this.publishProgress('creating_bot', 'completed');
     this.publishProgress('saving_credentials', 'running');
 
@@ -655,8 +805,8 @@ class QQBotAutoCreateSession extends EventEmitter {
     this.publishProgress('saving_credentials', 'completed');
 
     this.publishProgress('updating_profile', 'running');
-    const avatar = await uploadDefaultAvatar(creds);
-    await modifyQqBotProfile(creds, appId, name, desc, avatar).catch(() => {});
+    const avatar = await uploadDefaultAvatar(requestContext);
+    await modifyQqBotProfile(requestContext, appId, name, desc, avatar).catch(() => {});
     this.publishProgress('updating_profile', 'completed');
 
     this.complete({
@@ -666,57 +816,6 @@ class QQBotAutoCreateSession extends EventEmitter {
       developerId,
       name,
     });
-  }
-
-  private async handleResponse(response: PlaywrightResponse): Promise<void> {
-    if (this.cancelled || !this.page) return;
-
-    const url = response.url();
-    if (response.request().resourceType() !== 'fetch' && response.request().resourceType() !== 'xhr') {
-      return;
-    }
-
-    if (url.startsWith(QQ_CREATE_SESSION_URL)) {
-      await delay(QR_CAPTURE_DELAY_MS);
-      const qrcodeUrl = await captureQrDataUrlWithRetry(this.page);
-      if (qrcodeUrl) {
-        this.publishQr(qrcodeUrl);
-      }
-      return;
-    }
-
-    if (!url.startsWith(QQ_POLL_URL)) {
-      return;
-    }
-
-    try {
-      const payload = await response.json() as QQBotApiEnvelope<QQBotLoginPollPayload>;
-      const code = payload.data?.code;
-
-      switch (code) {
-        case QQ_POLL_SUCCESS: {
-          const developerId = payload.data?.developer_id?.trim();
-          if (!developerId) {
-            throw new Error('QQ login succeeded but no developer ID was returned.');
-          }
-          this.loginSuccess.resolve({ developerId });
-          break;
-        }
-        case QQ_POLL_EXPIRED:
-        case QQ_POLL_REJECTED:
-          this.publishProgress('waiting_for_scan', 'running');
-          await this.refreshQr();
-          break;
-        case QQ_POLL_WAITING:
-        case QQ_POLL_SCANNED:
-        default:
-          break;
-      }
-    } catch (error) {
-      if (!this.closed) {
-        this.fail(error);
-      }
-    }
   }
 
   private publishQr(qrcodeUrl: string): void {
@@ -732,22 +831,6 @@ class QQBotAutoCreateSession extends EventEmitter {
     this.emit(SESSION_EVENT_PROGRESS, { stepId, status });
   }
 
-  private async refreshQr(): Promise<void> {
-    if (this.refreshInFlight || !this.page || this.cancelled) {
-      return;
-    }
-
-    this.refreshInFlight = (async () => {
-      try {
-        await this.page?.reload({ waitUntil: 'domcontentloaded', timeout: 60_000 });
-      } finally {
-        this.refreshInFlight = null;
-      }
-    })();
-
-    await this.refreshInFlight;
-  }
-
   private complete(result: QQBotAutoCreateResult): void {
     if (this.closed) return;
     this.closed = true;
@@ -760,27 +843,17 @@ class QQBotAutoCreateSession extends EventEmitter {
     this.closed = true;
     this.publishProgress('failed', 'error');
     this.firstQr.reject(error);
-    this.loginSuccess.reject(error);
     this.completion.reject(error);
     void this.cleanup();
   }
 
   private async cleanup(): Promise<void> {
-    const context = this.context;
-    this.context = null;
-    this.page = null;
+    const networkSession = this.networkSession;
+    this.networkSession = null;
 
-    if (context) {
-      try {
-        await context.close();
-      } catch {
-        // Ignore close errors during cancellation/shutdown.
-      }
-    }
-
-    const userDataDir = await this.tempUserDataDirPromise.catch(() => null);
-    if (userDataDir) {
-      await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+    if (networkSession) {
+      await networkSession.clearStorageData().catch(() => {});
+      await networkSession.closeAllConnections().catch(() => {});
     }
   }
 }
