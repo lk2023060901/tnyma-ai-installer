@@ -12,6 +12,10 @@
             "title": "AIプロバイダー",
             "description": "AIサービスを構成"
         },
+        "model": {
+            "title": "モデルを選択",
+            "description": "現在のプロバイダーの既定モデルを選択"
+        },
         "channel": {
             "title": "チャンネル接続",
             "description": "メッセージングプラットフォームを接続（オプション）"
@@ -83,7 +87,14 @@
         "validateSave": "検証して保存",
         "valid": "プロバイダーが正常に構成されました",
         "invalid": "無効な API キー",
+        "completeLoginFirst": "先にブラウザーでのログインを完了してください",
         "storedLocally": "API キーはローカルマシンに保存されます。"
+    },
+    "model": {
+        "required": "モデルを選択してください",
+        "saveFailed": "モデルの保存に失敗しました: {{error}}",
+        "syncFailed": "モデル一覧の同期に失敗しました: {{error}}",
+        "noProviderConfigured": "利用可能な AI プロバイダー設定がありません"
     },
     "channel": {
         "title": "メッセージングチャンネルを接続",

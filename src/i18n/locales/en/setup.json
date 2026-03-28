@@ -12,6 +12,10 @@
             "title": "AI Provider",
             "description": "Configure your AI service"
         },
+        "model": {
+            "title": "Choose a Model",
+            "description": "Select the default model for the current provider"
+        },
         "channel": {
             "title": "Connect a Channel",
             "description": "Connect a messaging platform (optional)"
@@ -83,7 +87,14 @@
         "validateSave": "Validate & Save",
         "valid": "Provider configured successfully",
         "invalid": "Invalid API key",
+        "completeLoginFirst": "Complete the browser sign-in first",
         "storedLocally": "Your API key is stored locally on your machine."
+    },
+    "model": {
+        "required": "Select a model",
+        "saveFailed": "Failed to save model: {{error}}",
+        "syncFailed": "Failed to sync model list: {{error}}",
+        "noProviderConfigured": "No AI provider is configured yet"
     },
     "channel": {
         "title": "Connect a Messaging Channel",

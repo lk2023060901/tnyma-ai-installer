@@ -12,6 +12,10 @@
             "title": "AI 提供商",
             "description": "配置您的 AI 服务"
         },
+        "model": {
+            "title": "选择模型",
+            "description": "为当前提供商选择默认模型"
+        },
         "channel": {
             "title": "连接渠道",
             "description": "连接消息平台（可选）"
@@ -83,7 +87,14 @@
         "validateSave": "验证并保存",
         "valid": "提供商配置成功",
         "invalid": "无效的 API 密钥",
+        "completeLoginFirst": "请先完成浏览器登录",
         "storedLocally": "您的 API 密钥存储在本地机器上。"
+    },
+    "model": {
+        "required": "请选择一个模型",
+        "saveFailed": "保存模型失败：{{error}}",
+        "syncFailed": "同步模型列表失败：{{error}}",
+        "noProviderConfigured": "当前没有可用的 AI 提供商配置"
     },
     "channel": {
         "title": "连接消息渠道",

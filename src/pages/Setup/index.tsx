@@ -1,4 +1,12 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import {
+  forwardRef,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  useImperativeHandle,
+} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Check,
@@ -41,8 +49,9 @@ const STEP = {
   WELCOME: 0,
   RUNTIME: 1,
   PROVIDER: 2,
-  INSTALLING: 3,
-  COMPLETE: 4,
+  MODEL: 3,
+  INSTALLING: 4,
+  COMPLETE: 5,
 } as const;
 
 const getSteps = (t: TFunction): SetupStep[] => [
@@ -60,6 +69,11 @@ const getSteps = (t: TFunction): SetupStep[] => [
     id: 'provider',
     title: t('steps.provider.title'),
     description: t('steps.provider.description'),
+  },
+  {
+    id: 'model',
+    title: t('steps.model.title'),
+    description: t('steps.model.description'),
   },
   {
     id: 'installing',
@@ -106,8 +120,9 @@ import {
   pickPreferredAccount,
 } from '@/lib/provider-accounts';
 import {
+  ensureGatewayReadyForProviderModels,
+  fetchProviderModels,
   getStoredProviderModels,
-  syncProviderModelsToAccount,
   type ProviderModelCatalogEntry,
 } from '@/lib/provider-models';
 import {
@@ -124,6 +139,10 @@ import appIcon from '@/assets/logo.svg';
 const providers = SETUP_PROVIDERS;
 const CONTROL_UI_POLL_RETRIES = 12;
 const CONTROL_UI_POLL_INTERVAL_MS = 1000;
+
+interface SetupStepHandle {
+  submit: () => Promise<boolean>;
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -199,12 +218,16 @@ export function Setup() {
 
   // Setup state
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [providerConfigured, setProviderConfigured] = useState(false);
+  const [providerStepReady, setProviderStepReady] = useState(false);
+  const [modelStepReady, setModelStepReady] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [stepSubmitting, setStepSubmitting] = useState(false);
   // Installation state for the Installing step
   const [installedSkills, setInstalledSkills] = useState<string[]>([]);
   // Runtime check status
   const [runtimeChecksPassed, setRuntimeChecksPassed] = useState(false);
+  const providerStepRef = useRef<SetupStepHandle | null>(null);
+  const modelStepRef = useRef<SetupStepHandle | null>(null);
 
   const steps = getSteps(t);
   const safeStepIndex = Number.isInteger(currentStep)
@@ -222,7 +245,9 @@ export function Setup() {
       case STEP.RUNTIME:
         return runtimeChecksPassed;
       case STEP.PROVIDER:
-        return providerConfigured;
+        return providerStepReady && !stepSubmitting;
+      case STEP.MODEL:
+        return modelStepReady && !stepSubmitting;
       case STEP.INSTALLING:
         return false; // Cannot manually proceed, auto-proceeds when done
       case STEP.COMPLETE:
@@ -230,7 +255,7 @@ export function Setup() {
       default:
         return true;
     }
-  }, [safeStepIndex, providerConfigured, runtimeChecksPassed]);
+  }, [modelStepReady, providerStepReady, runtimeChecksPassed, safeStepIndex, stepSubmitting]);
 
   useEffect(() => {
     if (setupComplete) {
@@ -254,9 +279,42 @@ export function Setup() {
       } catch (error) {
         toast.error(String(error));
       }
-    } else {
-      setCurrentStep((i) => i + 1);
+      return;
     }
+
+    if (safeStepIndex === STEP.PROVIDER) {
+      if (!providerStepRef.current) {
+        return;
+      }
+      setStepSubmitting(true);
+      try {
+        const success = await providerStepRef.current.submit();
+        if (success) {
+          setCurrentStep((i) => i + 1);
+        }
+      } finally {
+        setStepSubmitting(false);
+      }
+      return;
+    }
+
+    if (safeStepIndex === STEP.MODEL) {
+      if (!modelStepRef.current) {
+        return;
+      }
+      setStepSubmitting(true);
+      try {
+        const success = await modelStepRef.current.submit();
+        if (success) {
+          setCurrentStep((i) => i + 1);
+        }
+      } finally {
+        setStepSubmitting(false);
+      }
+      return;
+    }
+
+    setCurrentStep((i) => i + 1);
   };
 
   const handleBack = () => {
@@ -337,12 +395,21 @@ export function Setup() {
               {safeStepIndex === STEP.RUNTIME && <RuntimeContent onStatusChange={setRuntimeChecksPassed} />}
               {safeStepIndex === STEP.PROVIDER && (
                 <ProviderContent
+                  ref={providerStepRef}
                   providers={providers}
                   selectedProvider={selectedProvider}
                   onSelectProvider={setSelectedProvider}
                   apiKey={apiKey}
                   onApiKeyChange={setApiKey}
-                  onConfiguredChange={setProviderConfigured}
+                  onCanProceedChange={setProviderStepReady}
+                />
+              )}
+              {safeStepIndex === STEP.MODEL && (
+                <ModelContent
+                  ref={modelStepRef}
+                  providers={providers}
+                  selectedProvider={selectedProvider}
+                  onCanProceedChange={setModelStepReady}
                 />
               )}
               {safeStepIndex === STEP.INSTALLING && (
@@ -365,7 +432,7 @@ export function Setup() {
               <div className="flex justify-between">
                 <div>
                   {!isFirstStep && (
-                    <Button variant="ghost" onClick={handleBack}>
+                    <Button variant="ghost" onClick={handleBack} disabled={stepSubmitting}>
                       <ChevronLeft className="h-4 w-4 mr-2" />
                       {t('nav.back')}
                     </Button>
@@ -373,13 +440,18 @@ export function Setup() {
                 </div>
                 <div className="flex gap-2">
                   {!isLastStep && safeStepIndex !== STEP.RUNTIME && (
-                    <Button variant="ghost" onClick={handleSkip}>
+                    <Button variant="ghost" onClick={handleSkip} disabled={stepSubmitting}>
                       {t('nav.skipSetup')}
                     </Button>
                   )}
-                  <Button onClick={handleNext} disabled={!canProceed}>
+                  <Button onClick={handleNext} disabled={!canProceed || stepSubmitting}>
                     {isLastStep ? (
                       t('nav.getStarted')
+                    ) : stepSubmitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        {t('nav.next')}
+                      </>
                     ) : (
                       <>
                         {t('nav.next')}
@@ -565,7 +637,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         },
       }));
     }
-  }, [t]);
+  }, [startGateway, t]);
 
   useEffect(() => {
     runChecks();
@@ -797,21 +869,19 @@ interface ProviderContentProps {
   onSelectProvider: (id: string | null) => void;
   apiKey: string;
   onApiKeyChange: (key: string) => void;
-  onConfiguredChange: (configured: boolean) => void;
+  onCanProceedChange: (canProceed: boolean) => void;
 }
 
-function ProviderContent({
+const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(function ProviderContent({
   providers,
   selectedProvider,
   onSelectProvider,
   apiKey,
   onApiKeyChange,
-  onConfiguredChange,
-}: ProviderContentProps) {
+  onCanProceedChange,
+}: ProviderContentProps, ref) {
   const { t, i18n } = useTranslation(['setup', 'settings']);
-  const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
   const [showKey, setShowKey] = useState(false);
-  const [validating, setValidating] = useState(false);
   const [keyValid, setKeyValid] = useState<boolean | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [activeAccount, setActiveAccount] = useState<ProviderAccount | null>(null);
@@ -820,8 +890,6 @@ function ProviderContent({
   const [apiProtocol, setApiProtocol] = useState<ProviderAccount['apiProtocol']>('openai-completions');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
-  const [availableModels, setAvailableModels] = useState<ProviderModelCatalogEntry[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [supportedChoices, setSupportedChoices] = useState<SupportedProviderChoice[]>([]);
   const [choicesLoading, setChoicesLoading] = useState(false);
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null);
@@ -859,14 +927,12 @@ function ProviderContent({
     ? getProviderIconUrl(selectedProviderData.id)
     : undefined;
   const showBaseUrlField = selectedProviderData?.showBaseUrl ?? false;
-  const showModelIdField = shouldShowProviderModelId(selectedProviderData, devModeUnlocked);
   const codePlanPreset = selectedProviderData?.codePlanPresetBaseUrl && selectedProviderData?.codePlanPresetModelId
     ? {
       baseUrl: selectedProviderData.codePlanPresetBaseUrl,
       modelId: selectedProviderData.codePlanPresetModelId,
     }
     : null;
-  const hasDiscoveredModels = availableModels.length > 0;
   const useOAuthFlow = selectedChoice?.authMode === 'oauth_browser'
     || selectedChoice?.authMode === 'oauth_device';
   const requiresApiKey = selectedChoice?.authMode === 'api_key'
@@ -882,30 +948,29 @@ function ProviderContent({
     }
     return selectedChoice?.defaultModelId || selectedProviderData?.defaultModelId || undefined;
   })();
+  const oauthConfigured = useMemo(() => {
+    if (!useOAuthFlow || !selectedChoice || !activeAccount || !selectedAccountId) {
+      return false;
+    }
+    return resolveProviderChoiceFromAccount(activeAccount) === selectedChoice.id;
+  }, [activeAccount, selectedAccountId, selectedChoice, useOAuthFlow]);
+  const canProceed = useMemo(() => {
+    if (!selectedChoice) {
+      return false;
+    }
+    if (useOAuthFlow) {
+      return oauthConfigured;
+    }
+    return requiresApiKey ? apiKey.trim().length > 0 : true;
+  }, [apiKey, oauthConfigured, requiresApiKey, selectedChoice, useOAuthFlow]);
 
   useEffect(() => {
     selectedChoiceRef.current = selectedChoice;
   }, [selectedChoice]);
 
-  const refreshProviderModels = useCallback(async (accountId: string, defaultModelId?: string) => {
-    setModelsLoading(true);
-    try {
-      const { models, selectedModelId } = await syncProviderModelsToAccount({
-        accountId,
-        defaultModelId,
-      });
-      setAvailableModels(models);
-      if (selectedModelId) {
-        setModelId(selectedModelId);
-      }
-      toast.success(t('settings:aiProviders.toast.modelsLoaded', { count: models.length }));
-    } catch (error) {
-      console.error('Failed to refresh provider models:', error);
-      toast.error(t('settings:aiProviders.toast.modelsLoadFailed', { error: String(error) }));
-    } finally {
-      setModelsLoading(false);
-    }
-  }, [t]);
+  useEffect(() => {
+    onCanProceedChange(canProceed);
+  }, [canProceed, onCanProceedChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -980,45 +1045,40 @@ function ProviderContent({
                   : {}),
               },
             };
-            if (latestChoice.apiProtocol && !existingAccount?.apiProtocol) {
-              updates.apiProtocol = latestChoice.apiProtocol;
-            }
-            if (latestChoice.headers && !existingAccount?.headers) {
-              updates.headers = latestChoice.headers;
-            }
-            if (latestChoice.defaultBaseUrl && !existingAccount?.baseUrl) {
-              updates.baseUrl = latestChoice.defaultBaseUrl;
-            }
-            if (latestChoice.defaultModelId && !existingAccount?.model) {
-              updates.model = latestChoice.defaultModelId;
-            }
-            await hostApiFetch(`/api/provider-accounts/${encodeURIComponent(accountId)}`, {
-              method: 'PUT',
-              body: JSON.stringify({ updates }),
-            });
+          if (latestChoice.apiProtocol && !existingAccount?.apiProtocol) {
+            updates.apiProtocol = latestChoice.apiProtocol;
           }
+          if (latestChoice.headers && !existingAccount?.headers) {
+            updates.headers = latestChoice.headers;
+          }
+          if (latestChoice.defaultBaseUrl && !existingAccount?.baseUrl) {
+            updates.baseUrl = latestChoice.defaultBaseUrl;
+          }
+          await hostApiFetch(`/api/provider-accounts/${encodeURIComponent(accountId)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ updates }),
+          });
+        }
           await hostApiFetch('/api/provider-accounts/default', {
             method: 'PUT',
             body: JSON.stringify({ accountId }),
-          });
-          setSelectedAccountId(accountId);
-          setActiveAccount(await hostApiFetch<ProviderAccount | null>(
-            `/api/provider-accounts/${encodeURIComponent(accountId)}`,
-          ));
-          await refreshProviderModels(accountId, latestChoice?.defaultModelId);
-        } catch (error) {
-          console.error('Failed to set default provider account:', error);
-        }
+        });
+        setSelectedAccountId(accountId);
+        setActiveAccount(await hostApiFetch<ProviderAccount | null>(
+          `/api/provider-accounts/${encodeURIComponent(accountId)}`,
+        ));
+      } catch (error) {
+        console.error('Failed to set default provider account:', error);
       }
+    }
 
       pendingOAuthRef.current = null;
-      if (latestChoice) {
-        setSelectedChoiceId(latestChoice.id);
-        onSelectProvider(latestChoice.vendorId);
-      }
-      onConfiguredChange(true);
-      toast.success(t('provider.valid'));
-    };
+    if (latestChoice) {
+      setSelectedChoiceId(latestChoice.id);
+      onSelectProvider(latestChoice.vendorId);
+    }
+    toast.success(t('provider.valid'));
+  };
 
     const handleError = (data: unknown) => {
       setOauthError((data as { message: string }).message);
@@ -1035,7 +1095,7 @@ function ProviderContent({
       offSuccess();
       offError();
     };
-  }, [onConfiguredChange, onSelectProvider, refreshProviderModels, t]);
+  }, [onSelectProvider, t]);
 
   const handleStartOAuth = async () => {
     if (!selectedChoice) return;
@@ -1134,28 +1194,22 @@ function ProviderContent({
           setSelectedAccountId(preferred.id);
           setActiveAccount(preferred);
           setSelectedChoiceId(restoredChoiceId);
-          const typeInfo = providers.find((p) => p.id === preferred.vendorId);
-          const restoredChoice = supportedChoices.find((choice) => choice.id === restoredChoiceId) ?? null;
-          const requiresKey = restoredChoice?.authMode === 'api_key'
-            && (typeInfo?.requiresApiKey ?? true);
-          onConfiguredChange(!requiresKey || hasConfiguredCredentials(preferred, statusMap.get(preferred.id)));
-          const storedKey = (await hostApiFetch<{ apiKey: string | null }>(
-            `/api/providers/${encodeURIComponent(preferred.id)}/api-key`,
-          )).apiKey;
-          onApiKeyChange(storedKey || '');
-          setAvailableModels(getStoredProviderModels(preferred));
-          setBaseUrl(preferred.baseUrl || restoredChoice?.defaultBaseUrl || typeInfo?.defaultBaseUrl || '');
-          setModelId(preferred.model || restoredChoice?.defaultModelId || typeInfo?.defaultModelId || '');
-          setApiProtocol(preferred.apiProtocol || restoredChoice?.apiProtocol || 'openai-completions');
-        } else if (!cancelled) {
-          setSelectedChoiceId(null);
-          onSelectProvider(null);
-          setSelectedAccountId(null);
-          onConfiguredChange(false);
-          onApiKeyChange('');
-          setAvailableModels([]);
-          setActiveAccount(null);
-        }
+        const typeInfo = providers.find((p) => p.id === preferred.vendorId);
+        const restoredChoice = supportedChoices.find((choice) => choice.id === restoredChoiceId) ?? null;
+        const storedKey = (await hostApiFetch<{ apiKey: string | null }>(
+          `/api/providers/${encodeURIComponent(preferred.id)}/api-key`,
+        )).apiKey;
+        onApiKeyChange(storedKey || '');
+        setBaseUrl(preferred.baseUrl || restoredChoice?.defaultBaseUrl || typeInfo?.defaultBaseUrl || '');
+        setModelId(preferred.model || restoredChoice?.defaultModelId || typeInfo?.defaultModelId || '');
+        setApiProtocol(preferred.apiProtocol || restoredChoice?.apiProtocol || 'openai-completions');
+      } else if (!cancelled) {
+        setSelectedChoiceId(null);
+        onSelectProvider(null);
+        setSelectedAccountId(null);
+        onApiKeyChange('');
+        setActiveAccount(null);
+      }
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load provider list:', error);
@@ -1163,7 +1217,7 @@ function ProviderContent({
       }
     })();
     return () => { cancelled = true; };
-  }, [onApiKeyChange, onConfiguredChange, onSelectProvider, providers, supportedChoices]);
+  }, [onApiKeyChange, onSelectProvider, providers, supportedChoices]);
 
   // When provider changes, load stored key + reset base URL
   useEffect(() => {
@@ -1172,7 +1226,6 @@ function ProviderContent({
       if (!selectedChoice) {
         setSelectedAccountId(null);
         setActiveAccount(null);
-        setAvailableModels([]);
         return;
       }
       setApiProtocol('openai-completions');
@@ -1195,13 +1248,12 @@ function ProviderContent({
 
         const storedKey = (await hostApiFetch<{ apiKey: string | null }>(
           `/api/providers/${encodeURIComponent(accountIdForLoad)}/api-key`,
-        )).apiKey;
-        if (!cancelled) {
-          onApiKeyChange(sameChoiceAccount ? (storedKey || '') : '');
-          setAvailableModels(sameChoiceAccount ? getStoredProviderModels(preferredAccount) : []);
+      )).apiKey;
+      if (!cancelled) {
+        onApiKeyChange(sameChoiceAccount ? (storedKey || '') : '');
 
-          const info = providers.find((p) => p.id === selectedChoice.vendorId);
-          const nextBaseUrl = sameChoiceAccount
+        const info = providers.find((p) => p.id === selectedChoice.vendorId);
+        const nextBaseUrl = sameChoiceAccount
             ? (preferredAccount?.baseUrl || selectedChoice.defaultBaseUrl || info?.defaultBaseUrl || '')
             : (selectedChoice.defaultBaseUrl || info?.defaultBaseUrl || '');
           const nextModelId = sameChoiceAccount
@@ -1258,32 +1310,41 @@ function ProviderContent({
     };
   }, [providerMenuOpen]);
 
-  const handleValidateAndSave = async () => {
-    if (!selectedChoice) return;
+  const handleValidateAndSave = useCallback(async (): Promise<boolean> => {
+    if (!selectedChoice) {
+      return false;
+    }
+
+    if (useOAuthFlow) {
+      if (oauthConfigured) {
+        setKeyValid(true);
+        return true;
+      }
+      toast.error(t('provider.completeLoginFirst'));
+      return false;
+    }
 
     try {
       const snapshot = await fetchProviderSnapshot();
       const existingVendorIds = new Set(snapshot.accounts.map((account) => account.vendorId));
       if (selectedChoice.vendorId === 'minimax-portal' && existingVendorIds.has('minimax-portal-cn')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
-        return;
+        return false;
       }
       if (selectedChoice.vendorId === 'minimax-portal-cn' && existingVendorIds.has('minimax-portal')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
-        return;
+        return false;
       }
     } catch {
       // ignore check failure
     }
 
-    setValidating(true);
     setKeyValid(null);
 
     try {
       if (requiresApiKey && !apiKey.trim()) {
         toast.error(t('provider.invalid'));
-        setValidating(false);
-        return;
+        return false;
       }
 
       if (requiresApiKey && apiKey.trim() && !selectedChoice.skipValidation) {
@@ -1301,17 +1362,10 @@ function ProviderContent({
 
         if (!result.valid) {
           toast.error(result.error || t('provider.invalid'));
-          setValidating(false);
-          return;
+          return false;
         }
       } else {
         setKeyValid(true);
-      }
-
-      if ((showModelIdField || hasDiscoveredModels) && !effectiveModelId) {
-        toast.error(t('settings:aiProviders.toast.modelRequired'));
-        setValidating(false);
-        return;
       }
 
       const snapshot = await fetchProviderSnapshot();
@@ -1330,7 +1384,9 @@ function ProviderContent({
         baseUrl: baseUrl.trim() || selectedChoice.defaultBaseUrl || undefined,
         apiProtocol: resolvedApiProtocol,
         headers: selectedChoice.headers,
-        model: effectiveModelId,
+        model: selectedChoice.vendorId === 'ark' && arkMode === 'codeplan'
+          ? effectiveModelId
+          : activeAccount?.model,
         enabled: true,
         isDefault: false,
         metadata: {
@@ -1386,25 +1442,37 @@ function ProviderContent({
       }
 
       setSelectedAccountId(accountIdForSave);
-      setActiveAccount(accountPayload);
-      await refreshProviderModels(accountIdForSave, effectiveModelId || selectedChoice.defaultModelId);
-      onConfiguredChange(true);
+      setActiveAccount({
+        ...(activeAccount ?? accountPayload),
+        ...accountPayload,
+        id: accountIdForSave,
+        updatedAt: new Date().toISOString(),
+      });
       toast.success(t('provider.valid'));
+      return true;
     } catch (error) {
       setKeyValid(false);
-      onConfiguredChange(false);
       toast.error('Configuration failed: ' + String(error));
-    } finally {
-      setValidating(false);
+      return false;
     }
-  };
+  }, [
+    activeAccount,
+    apiKey,
+    arkMode,
+    baseUrl,
+    effectiveModelId,
+    oauthConfigured,
+    requiresApiKey,
+    resolvedApiProtocol,
+    selectedAccountId,
+    selectedChoice,
+    t,
+    useOAuthFlow,
+  ]);
 
-  // Can the user submit?
-  const canSubmit =
-    selectedChoice
-    && (requiresApiKey ? apiKey.trim().length > 0 : true)
-    && ((showModelIdField || hasDiscoveredModels) ? Boolean(effectiveModelId) : true)
-    && !useOAuthFlow;
+  useImperativeHandle(ref, () => ({
+    submit: handleValidateAndSave,
+  }), [handleValidateAndSave]);
 
   const handleSelectProviderChoice = (choice: SupportedProviderChoice) => {
     const typeInfo = providers.find((provider) => provider.id === choice.vendorId);
@@ -1412,13 +1480,11 @@ function ProviderContent({
     setSelectedChoiceId(choice.id);
     setSelectedAccountId(null);
     setActiveAccount(null);
-    onConfiguredChange(false);
     onApiKeyChange('');
     setKeyValid(null);
     setShowKey(false);
     setProviderMenuOpen(false);
     setArkMode('apikey');
-    setAvailableModels([]);
     setBaseUrl(choice.defaultBaseUrl || typeInfo?.defaultBaseUrl || '');
     setModelId(choice.defaultModelId || typeInfo?.defaultModelId || '');
     setApiProtocol(choice.apiProtocol || 'openai-completions');
@@ -1566,7 +1632,7 @@ function ProviderContent({
                     if (modelId.trim() === codePlanPreset.modelId) {
                       setModelId(selectedProviderData?.defaultModelId || '');
                     }
-                    onConfiguredChange(false);
+                    setKeyValid(null);
                   }}
                   className={cn(
                     'flex-1 py-2 px-3 rounded-lg border transition-colors',
@@ -1583,7 +1649,7 @@ function ProviderContent({
                     setArkMode('codeplan');
                     setBaseUrl(codePlanPreset.baseUrl);
                     setModelId(codePlanPreset.modelId);
-                    onConfiguredChange(false);
+                    setKeyValid(null);
                   }}
                   className={cn(
                     'flex-1 py-2 px-3 rounded-lg border transition-colors',
@@ -1614,65 +1680,11 @@ function ProviderContent({
                 value={baseUrl}
                 onChange={(e) => {
                   setBaseUrl(e.target.value);
-                  onConfiguredChange(false);
+                  setKeyValid(null);
                 }}
                 autoComplete="off"
                 className="bg-background border-input"
               />
-            </div>
-          )}
-
-          {/* Model ID field (static or discovered from gateway) */}
-          {(showModelIdField || hasDiscoveredModels) && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="modelId">{t('provider.modelId')}</Label>
-                {selectedAccountId && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => refreshProviderModels(selectedAccountId, selectedProviderData?.defaultModelId)}
-                    disabled={modelsLoading}
-                  >
-                    {modelsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                    <span className="ml-1">{t('settings:aiProviders.dialog.refreshModels')}</span>
-                  </Button>
-                )}
-              </div>
-              {hasDiscoveredModels ? (
-                <Select
-                  id="modelId"
-                  value={modelId}
-                  onChange={(e) => {
-                    setModelId(e.target.value);
-                    onConfiguredChange(false);
-                  }}
-                  className="bg-background border-input"
-                >
-                  <option value="" disabled>{t('settings:aiProviders.dialog.selectModel')}</option>
-                  {availableModels.map((model) => (
-                    <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                  ))}
-                </Select>
-              ) : (
-                <Input
-                  id="modelId"
-                  type="text"
-                  placeholder={selectedProviderData?.modelIdPlaceholder || 'e.g. deepseek-ai/DeepSeek-V3'}
-                  value={modelId}
-                  onChange={(e) => {
-                    setModelId(e.target.value);
-                    onConfiguredChange(false);
-                  }}
-                  autoComplete="off"
-                  className="bg-background border-input"
-                />
-              )}
-              <p className="text-xs text-muted-foreground">
-                {t('provider.modelIdDesc')}
-              </p>
             </div>
           )}
 
@@ -1684,7 +1696,7 @@ function ProviderContent({
                   type="button"
                   onClick={() => {
                     setApiProtocol('openai-completions');
-                    onConfiguredChange(false);
+                    setKeyValid(null);
                   }}
                   className={cn(
                     'flex-1 py-2 px-3 rounded-lg border transition-colors',
@@ -1699,7 +1711,7 @@ function ProviderContent({
                   type="button"
                   onClick={() => {
                     setApiProtocol('openai-responses');
-                    onConfiguredChange(false);
+                    setKeyValid(null);
                   }}
                   className={cn(
                     'flex-1 py-2 px-3 rounded-lg border transition-colors',
@@ -1714,7 +1726,7 @@ function ProviderContent({
                   type="button"
                   onClick={() => {
                     setApiProtocol('anthropic-messages');
-                    onConfiguredChange(false);
+                    setKeyValid(null);
                   }}
                   className={cn(
                     'flex-1 py-2 px-3 rounded-lg border transition-colors',
@@ -1741,7 +1753,6 @@ function ProviderContent({
                   value={apiKey}
                   onChange={(e) => {
                     onApiKeyChange(e.target.value);
-                    onConfiguredChange(false);
                     setKeyValid(null);
                   }}
                   autoComplete="off"
@@ -1887,18 +1898,6 @@ function ProviderContent({
             </div>
           )}
 
-          {/* Validate & Save */}
-          <Button
-            onClick={handleValidateAndSave}
-            disabled={!canSubmit || validating}
-            className={cn("w-full", useOAuthFlow && "hidden")}
-          >
-            {validating ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-            ) : null}
-            {requiresApiKey ? t('provider.validateSave') : t('provider.save')}
-          </Button>
-
           {keyValid !== null && (
             <p className={cn('text-sm text-center', keyValid ? 'text-green-400' : 'text-red-400')}>
               {keyValid ? `✓ ${t('provider.valid')}` : `✗ ${t('provider.invalid')}`}
@@ -1912,7 +1911,221 @@ function ProviderContent({
       )}
     </div>
   );
+});
+
+interface ModelContentProps {
+  providers: ProviderTypeInfo[];
+  selectedProvider: string | null;
+  onCanProceedChange: (canProceed: boolean) => void;
 }
+
+const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function ModelContent({
+  providers,
+  selectedProvider,
+  onCanProceedChange,
+}: ModelContentProps, ref) {
+  const { t } = useTranslation(['setup', 'settings']);
+  const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
+  const [account, setAccount] = useState<ProviderAccount | null>(null);
+  const [modelId, setModelId] = useState('');
+  const [availableModels, setAvailableModels] = useState<ProviderModelCatalogEntry[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const providerData = providers.find((provider) => provider.id === (account?.vendorId ?? selectedProvider));
+  const hasDiscoveredModels = availableModels.length > 0;
+  const showModelIdField = shouldShowProviderModelId(providerData, devModeUnlocked) || hasDiscoveredModels;
+  const effectiveModelId = modelId.trim();
+  const canProceed = Boolean(account && effectiveModelId);
+
+  useEffect(() => {
+    onCanProceedChange(canProceed);
+  }, [canProceed, onCanProceedChange]);
+
+  const loadModels = useCallback(async (nextAccount: ProviderAccount) => {
+    const nextProvider = providers.find((provider) => provider.id === nextAccount.vendorId);
+    const fallbackModels = getStoredProviderModels(nextAccount);
+
+    setModelsLoading(true);
+    setLoadError(null);
+    try {
+      await ensureGatewayReadyForProviderModels();
+      const models = await fetchProviderModels(nextAccount.id);
+      const refreshedAccount = await hostApiFetch<ProviderAccount | null>(
+        `/api/provider-accounts/${encodeURIComponent(nextAccount.id)}`,
+      );
+      const resolvedAccount = refreshedAccount ?? nextAccount;
+      const resolvedModels = models.length > 0 ? models : getStoredProviderModels(resolvedAccount);
+      const resolvedModelId = models[0]?.id
+        || resolvedAccount.model?.trim()
+        || nextProvider?.defaultModelId?.trim()
+        || resolvedModels[0]?.id
+        || '';
+
+      setAccount(resolvedAccount);
+      setAvailableModels(resolvedModels);
+      setModelId(resolvedModelId);
+    } catch (error) {
+      console.error('Failed to load provider models:', error);
+      const fallbackModelId = nextAccount.model?.trim()
+        || nextProvider?.defaultModelId?.trim()
+        || fallbackModels[0]?.id
+        || '';
+      setAccount(nextAccount);
+      setAvailableModels(fallbackModels);
+      setModelId(fallbackModelId);
+      setLoadError(String(error));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [providers]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snapshot = await fetchProviderSnapshot();
+        const statusMap = new Map(snapshot.statuses.map((status) => [status.id, status]));
+        const preferredAccount = selectedProvider
+          ? pickPreferredAccount(snapshot.accounts, snapshot.defaultAccountId, selectedProvider, statusMap)
+          : (snapshot.defaultAccountId
+            ? snapshot.accounts.find((candidate) => candidate.id === snapshot.defaultAccountId) ?? null
+            : snapshot.accounts[0] ?? null);
+
+        if (!preferredAccount) {
+          throw new Error(t('model.noProviderConfigured'));
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        await loadModels(preferredAccount);
+      } catch (error) {
+        if (!cancelled) {
+          setAccount(null);
+          setAvailableModels([]);
+          setModelId('');
+          setLoadError(String(error));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadModels, selectedProvider, t]);
+
+  const handleSaveModel = useCallback(async (): Promise<boolean> => {
+    if (!account) {
+      toast.error(t('model.noProviderConfigured'));
+      return false;
+    }
+
+    if (!effectiveModelId) {
+      toast.error(t('model.required'));
+      return false;
+    }
+
+    setSaving(true);
+    try {
+      const updates: Partial<ProviderAccount> = {
+        model: effectiveModelId,
+        metadata: {
+          ...(account.metadata ?? {}),
+          ...(availableModels.length > 0
+            ? { customModels: availableModels.map((model) => model.id) }
+            : {}),
+        },
+      };
+      const result = await hostApiFetch<{ success: boolean; error?: string }>(
+        `/api/provider-accounts/${encodeURIComponent(account.id)}`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ updates }),
+        },
+      );
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to save model');
+      }
+
+      setAccount({
+        ...account,
+        model: effectiveModelId,
+        metadata: updates.metadata ?? account.metadata,
+        updatedAt: new Date().toISOString(),
+      });
+      return true;
+    } catch (error) {
+      toast.error(t('model.saveFailed', { error: String(error) }));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [account, availableModels, effectiveModelId, t]);
+
+  useImperativeHandle(ref, () => ({
+    submit: handleSaveModel,
+  }), [handleSaveModel]);
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="setup-model-id">{t('provider.modelId')}</Label>
+          {account && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => void loadModels(account)}
+              disabled={modelsLoading || saving}
+            >
+              {modelsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              <span className="ml-1">{t('settings:aiProviders.dialog.refreshModels')}</span>
+            </Button>
+          )}
+        </div>
+        {showModelIdField && hasDiscoveredModels ? (
+          <Select
+            id="setup-model-id"
+            value={modelId}
+            onChange={(event) => setModelId(event.target.value)}
+            className="bg-background border-input"
+            disabled={modelsLoading || saving}
+          >
+            <option value="" disabled>{t('settings:aiProviders.dialog.selectModel')}</option>
+            {availableModels.map((model) => (
+              <option key={model.id} value={model.id}>{model.name || model.id}</option>
+            ))}
+          </Select>
+        ) : (
+          <Input
+            id="setup-model-id"
+            type="text"
+            placeholder={providerData?.modelIdPlaceholder || 'e.g. openai/gpt-5.4'}
+            value={modelId}
+            onChange={(event) => setModelId(event.target.value)}
+            autoComplete="off"
+            className="bg-background border-input"
+            disabled={saving}
+          />
+        )}
+        <p className="text-xs text-muted-foreground">
+          {t('provider.modelIdDesc')}
+        </p>
+      </div>
+
+      {loadError && (
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
+          {t('model.syncFailed', { error: loadError })}
+        </div>
+      )}
+    </div>
+  );
+});
 
 // NOTE: SkillsContent component removed - auto-install essential skills
 
