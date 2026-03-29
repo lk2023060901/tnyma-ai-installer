@@ -5,6 +5,17 @@ import { readFileSync, existsSync, mkdirSync, rmSync, cpSync, writeFileSync } fr
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+if (process.platform === 'win32' && !$.quote) {
+  // zx 8.x requires an explicit quote function on Windows.
+  $.shell = process.env.ComSpec || 'cmd.exe';
+  $.prefix = '';
+  $.quote = (arg) => {
+    const s = String(arg);
+    if (!/[\s"&|<>^%()!]/.test(s)) return s;
+    return `"${s.replace(/"/g, '\\"')}"`;
+  };
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const MANIFEST_PATH = join(ROOT, 'resources', 'skills', 'preinstalled-manifest.json');
