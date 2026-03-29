@@ -368,10 +368,12 @@ async function createHiddenWindow(partition: string): Promise<BrowserWindow> {
     frame: false,
     hasShadow: false,
     roundedCorners: false,
-    show: false,
+    show: true,
     skipTaskbar: true,
     width: 960,
     height: 720,
+    x: -10_000,
+    y: -10_000,
     webPreferences: {
       backgroundThrottling: false,
       partition,
@@ -381,6 +383,7 @@ async function createHiddenWindow(partition: string): Promise<BrowserWindow> {
     },
   });
   window.webContents.setUserAgent(FEISHU_USER_AGENT);
+  window.setIgnoreMouseEvents(true);
   return window;
 }
 
@@ -1047,8 +1050,10 @@ class FeishuAutoCreateSession extends EventEmitter {
     this.bindDeveloperRequestCapture();
     this.qrWindow = await createHiddenWindow(this.sessionPartition);
     this.bindWindowLifecycleHandlers(this.qrWindow);
+    this.bindInitResponseCapture();
     await this.attachDebugger();
     await this.qrWindow.loadURL(buildLoginUrl(FEISHU_APP_LIST_URL));
+    this.startTokenPollingFallback();
 
     await waitForOpenPlatformNavigation(this.qrWindow.webContents);
 
@@ -1162,12 +1167,166 @@ class FeishuAutoCreateSession extends EventEmitter {
       throw new Error('Feishu hidden window was not created.');
     }
 
-    const { debugger: debuggerApi } = this.qrWindow.webContents;
-    if (!debuggerApi.isAttached()) {
-      debuggerApi.attach('1.3');
+    try {
+      const { debugger: debuggerApi } = this.qrWindow.webContents;
+      if (!debuggerApi.isAttached()) {
+        debuggerApi.attach('1.3');
+      }
+      debuggerApi.on('message', this.onDebuggerMessage);
+      await debuggerApi.sendCommand('Network.enable');
+      logger.info('Feishu CDP debugger attached successfully');
+    } catch (error) {
+      logger.warn('Feishu CDP debugger attach failed, relying on fallback token polling:', error);
     }
-    debuggerApi.on('message', this.onDebuggerMessage);
-    await debuggerApi.sendCommand('Network.enable');
+  }
+
+  private bindInitResponseCapture(): void {
+    if (!this.networkSession) {
+      return;
+    }
+
+    this.networkSession.webRequest.onCompleted(
+      { urls: [`${FEISHU_ACCOUNTS_BASE_URL}/accounts/qrlogin/*`] },
+      (details) => {
+        if (this.cancelled || this.closed || this.scanCompleted) {
+          return;
+        }
+        const url = details.url || '';
+        if (url.includes('/qrlogin/init')) {
+          logger.info('Feishu qrlogin/init request completed (webRequest hook), will poll for token');
+          void this.pollTokenFromPage();
+        }
+      },
+    );
+  }
+
+  private async pollTokenFromPage(): Promise<void> {
+    if (this.firstQrDelivered || this.cancelled || this.closed || !this.qrWindow) {
+      return;
+    }
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (this.firstQrDelivered || this.cancelled || this.closed) {
+        return;
+      }
+
+      const qrWindow = this.qrWindow;
+      if (!qrWindow || qrWindow.isDestroyed() || qrWindow.webContents.isDestroyed()) {
+        return;
+      }
+
+      try {
+        const token = await qrWindow.webContents.executeJavaScript(`
+          (() => {
+            try {
+              const selectors = [
+                '[class*="qrcode"] canvas',
+                '[class*="qr-code"] canvas',
+                '.newLogin_scan-QR-code canvas',
+                'canvas',
+              ];
+              for (const sel of selectors) {
+                const c = document.querySelector(sel);
+                if (c && c.width >= 64 && c.height >= 64) return '__CANVAS_FOUND__';
+              }
+            } catch {}
+            return null;
+          })();
+        `, true);
+
+        if (token === '__CANVAS_FOUND__' && !this.firstQrDelivered) {
+          // Canvas found but we need the actual token. Try extracting from React internals.
+          const extractedToken = await qrWindow.webContents.executeJavaScript(`
+            (() => {
+              try {
+                // The QR code renders JSON.stringify({qrlogin: {token}}) - try to find it in React fiber
+                const walk = (node) => {
+                  if (!node) return null;
+                  const props = node.memoizedProps || node.pendingProps || {};
+                  if (props.value && typeof props.value === 'string' && props.value.includes('qrlogin')) {
+                    try { const p = JSON.parse(props.value); if (p.qrlogin?.token) return p.qrlogin.token; } catch {}
+                  }
+                  if (props.children) {
+                    if (Array.isArray(props.children)) {
+                      for (const c of props.children) { const r = walk(c?._owner?.stateNode?.__fiber || c); if (r) return r; }
+                    }
+                  }
+                  let child = node.child;
+                  while (child) { const r = walk(child); if (r) return r; child = child.sibling; }
+                  return null;
+                };
+                const root = document.querySelector('#root') || document.querySelector('#app');
+                if (root && root._reactRootContainer) return walk(root._reactRootContainer._internalRoot?.current);
+                if (root) {
+                  const key = Object.keys(root).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+                  if (key) return walk(root[key]);
+                }
+              } catch {}
+              return null;
+            })();
+          `, true);
+
+          if (typeof extractedToken === 'string' && extractedToken.length > 0) {
+            const qrContent = buildQrContentFromToken(extractedToken);
+            const qrcodeUrl = renderQrPngDataUrl(qrContent);
+            this.publishQr(qrcodeUrl);
+            logger.info('Rendered Feishu QR code from page-extracted token (fallback)');
+            return;
+          }
+
+          // Last resort: capture the canvas directly from the page
+          const canvasDataUrl = await qrWindow.webContents.executeJavaScript(`
+            (() => {
+              const selectors = [
+                '[class*="qrcode"] canvas',
+                '[class*="qr-code"] canvas',
+                '.newLogin_scan-QR-code canvas',
+                'canvas',
+              ];
+              for (const sel of selectors) {
+                const c = document.querySelector(sel);
+                if (c && c instanceof HTMLCanvasElement && c.width >= 64 && c.height >= 64) {
+                  try { return c.toDataURL('image/png'); } catch {}
+                }
+              }
+              return null;
+            })();
+          `, true);
+
+          if (typeof canvasDataUrl === 'string' && canvasDataUrl.startsWith('data:image/')) {
+            this.publishQr(canvasDataUrl);
+            logger.info('Captured Feishu QR code from canvas (fallback)');
+            return;
+          }
+        }
+      } catch {
+        // Page not ready yet
+      }
+
+      await delay(500);
+    }
+  }
+
+  private startTokenPollingFallback(): void {
+    if (this.firstQrDelivered) {
+      return;
+    }
+
+    const pollingPromise = (async () => {
+      // Wait for the page to load
+      await delay(2_000);
+      if (this.firstQrDelivered || this.cancelled || this.closed) {
+        return;
+      }
+      logger.info('Starting Feishu token polling fallback');
+      await this.pollTokenFromPage();
+    })();
+
+    pollingPromise.catch((error) => {
+      if (!this.cancelled && !this.closed) {
+        logger.warn('Feishu token polling fallback failed:', error);
+      }
+    });
   }
 
   private async safeDebuggerCommand<T>(command: string, params?: Record<string, unknown>): Promise<T | null> {
