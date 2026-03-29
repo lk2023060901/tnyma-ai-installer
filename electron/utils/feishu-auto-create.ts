@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { BrowserContext, Page, Request, Response } from 'playwright-core';
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { deflateSync } from 'node:zlib';
+import type { BrowserWindow, Session } from 'electron';
+import { getOpenClawResolvedDir } from './paths';
+import { logger } from './logger';
+import { buildElectronProxyConfig } from './proxy';
 import { proxyAwareFetch } from './proxy-fetch';
+import { getAllSettings } from './store';
+
+const require = createRequire(import.meta.url);
 
 const FEISHU_ACCOUNTS_BASE_URL = 'https://accounts.feishu.cn';
 const FEISHU_OPEN_BASE_URL = 'https://open.feishu.cn';
@@ -17,7 +24,6 @@ const FEISHU_EVENT_FORMAT_V2 = 1;
 const LOGIN_TIMEOUT_MS = 8 * 60_000;
 const FIRST_QR_TIMEOUT_MS = 30_000;
 const SESSION_TIMEOUT_MS = 15 * 60_000;
-const QR_CAPTURE_DELAY_MS = 400;
 const DEFAULT_APP_DESCRIPTION = 'Created by TnymaAI';
 const FEISHU_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
@@ -303,6 +309,7 @@ function createDeferred<T>(): Deferred<T> {
     resolve = innerResolve;
     reject = innerReject;
   });
+  void promise.catch(() => {});
   return { promise, resolve, reject };
 }
 
@@ -336,32 +343,178 @@ function buildLoginUrl(redirectUri: string): string {
   return `${FEISHU_ACCOUNTS_BASE_URL}/accounts/page/login?app_id=7&no_trap=1&redirect_uri=${encodeURIComponent(redirectUri)}`;
 }
 
-function findChromeExecutable(): string {
-  const envPath = process.env.CHROME_PATH?.trim();
-  const candidates = [
-    envPath,
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-    '/usr/bin/microsoft-edge',
-    '/usr/bin/microsoft-edge-stable',
-  ];
-
-  for (const candidate of candidates) {
-    if (candidate && existsSync(candidate)) {
-      return candidate;
-    }
+async function createRequestSession(partition: string): Promise<Session> {
+  if (!process.versions.electron) {
+    throw new Error('Feishu auto-create requires Electron main-process networking.');
   }
 
-  throw new Error('Chrome or Edge was not found. Set CHROME_PATH or install Chrome first.');
+  const { session } = await import('electron');
+  const requestSession = session.fromPartition(partition, { cache: false });
+  const appSettings = await getAllSettings().catch(() => null);
+  if (appSettings) {
+    await requestSession.setProxy(buildElectronProxyConfig(appSettings)).catch(() => {});
+  }
+  return requestSession;
+}
+
+async function createHiddenWindow(partition: string): Promise<BrowserWindow> {
+  if (!process.versions.electron) {
+    throw new Error('Feishu auto-create requires Electron main-process windows.');
+  }
+
+  const { BrowserWindow } = await import('electron');
+  const window = new BrowserWindow({
+    focusable: false,
+    frame: false,
+    hasShadow: false,
+    roundedCorners: false,
+    show: false,
+    skipTaskbar: true,
+    width: 960,
+    height: 720,
+    webPreferences: {
+      backgroundThrottling: false,
+      partition,
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  window.webContents.setUserAgent(FEISHU_USER_AGENT);
+  return window;
+}
+
+type QrRenderDeps = {
+  QRCode: typeof import('qrcode-terminal/vendor/QRCode/index.js');
+  QRErrorCorrectLevel: typeof import('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js');
+};
+
+let qrRenderDeps: QrRenderDeps | null = null;
+
+function getQrRenderDeps(): QrRenderDeps {
+  if (qrRenderDeps) {
+    return qrRenderDeps;
+  }
+  const openclawRequire = createRequire(join(getOpenClawResolvedDir(), 'package.json'));
+  const qrcodeTerminalPath = dirname(openclawRequire.resolve('qrcode-terminal/package.json'));
+  qrRenderDeps = {
+    QRCode: require(join(qrcodeTerminalPath, 'vendor', 'QRCode', 'index.js')),
+    QRErrorCorrectLevel: require(join(qrcodeTerminalPath, 'vendor', 'QRCode', 'QRErrorCorrectLevel.js')),
+  };
+  return qrRenderDeps;
+}
+
+function createQrMatrix(input: string) {
+  const { QRCode, QRErrorCorrectLevel } = getQrRenderDeps();
+  const qr = new QRCode(-1, QRErrorCorrectLevel.Q);
+  qr.addData(input);
+  qr.make();
+  return qr;
+}
+
+function fillPixel(buf: Buffer, x: number, y: number, width: number, r: number, g: number, b: number, a = 255) {
+  const idx = (y * width + x) * 4;
+  buf[idx] = r;
+  buf[idx + 1] = g;
+  buf[idx + 2] = b;
+  buf[idx + 3] = a;
+}
+
+function crcTable() {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+}
+
+const CRC_TABLE = crcTable();
+
+function crc32(buf: Buffer) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer) {
+  const typeBuf = Buffer.from(type, 'ascii');
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = crc32(Buffer.concat([typeBuf, data]));
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc, 0);
+  return Buffer.concat([len, typeBuf, data, crcBuf]);
+}
+
+function encodePngRgba(buffer: Buffer, width: number, height: number) {
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let row = 0; row < height; row += 1) {
+    const rawOffset = row * (stride + 1);
+    raw[rawOffset] = 0;
+    buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
+  }
+  const compressed = deflateSync(raw);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return Buffer.concat([signature, pngChunk('IHDR', ihdr), pngChunk('IDAT', compressed), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
+function renderQrPngDataUrl(input: string, opts: { scale?: number; marginModules?: number } = {}): string {
+  const { scale = 6, marginModules = 4 } = opts;
+  const qr = createQrMatrix(input);
+  const modules = qr.getModuleCount();
+  const size = (modules + marginModules * 2) * scale;
+  const buf = Buffer.alloc(size * size * 4, 255);
+  for (let row = 0; row < modules; row += 1) {
+    for (let col = 0; col < modules; col += 1) {
+      if (!qr.isDark(row, col)) continue;
+      const startX = (col + marginModules) * scale;
+      const startY = (row + marginModules) * scale;
+      for (let y = 0; y < scale; y += 1) {
+        for (let x = 0; x < scale; x += 1) {
+          fillPixel(buf, startX + x, startY + y, size, 0, 0, 0, 255);
+        }
+      }
+    }
+  }
+  const png = encodePngRgba(buf, size, size);
+  return `data:image/png;base64,${png.toString('base64')}`;
+}
+
+function buildQrContentFromToken(token: string): string {
+  return JSON.stringify({ qrlogin: { token } });
+}
+
+function readHeaderValue(headers: Record<string, string | string[]>, ...names: string[]): string {
+  for (const targetName of names) {
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() !== targetName.toLowerCase()) continue;
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+      if (Array.isArray(value)) {
+        const joined = value.join('; ').trim();
+        if (joined) {
+          return joined;
+        }
+      }
+    }
+  }
+  return '';
 }
 
 function getAvatarCandidates(): string[] {
@@ -707,115 +860,64 @@ async function createVersionAndPublish(creds: Credentials, appId: string, creato
   return versionId;
 }
 
-async function captureQrDataUrl(page: Page): Promise<string | null> {
-  const selectors = [
-    '.newLogin_scan-QR-code canvas',
-    '.new-scan-qrcode-container canvas',
-    '[class*="qrcode"] canvas',
-    '[class*="qr-code"] canvas',
-    'canvas',
-  ];
-
-  for (const selector of selectors) {
-    try {
-      const dataUrl = await page.evaluate((inputSelector) => {
-        const canvas = document.querySelector(inputSelector) as HTMLCanvasElement | null;
-        if (!canvas || canvas.width < 64 || canvas.height < 64) {
-          return null;
-        }
-        return canvas.toDataURL('image/png');
-      }, selector);
-
-      if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/png;base64,')) {
-        return dataUrl;
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
-}
-
-async function captureQrDataUrlWithRetry(page: Page, attempts = 8, delayMs = 250): Promise<string | null> {
-  for (let index = 0; index < attempts; index += 1) {
-    const qrcodeUrl = await captureQrDataUrl(page);
-    if (qrcodeUrl) {
-      return qrcodeUrl;
-    }
-    if (index < attempts - 1) {
-      await delay(delayMs);
-    }
-  }
-  return null;
-}
-
-async function waitForOpenPlatformNavigation(page: Page): Promise<void> {
+async function waitForOpenPlatformNavigation(webContents: import('electron').WebContents): Promise<void> {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const url = page.url();
+    if (webContents.isDestroyed()) {
+      throw new Error('Feishu login window closed before the Open Platform page loaded.');
+    }
+    const url = webContents.getURL();
     if (url.startsWith(FEISHU_OPEN_BASE_URL) && !url.startsWith(`${FEISHU_ACCOUNTS_BASE_URL}/accounts/page/login`)) {
       return;
     }
-    await page.waitForTimeout(1000);
+    await delay(1000);
   }
   throw new Error('Timed out waiting for Feishu login confirmation.');
 }
 
-async function captureCredentials(context: BrowserContext, page: Page): Promise<Credentials> {
-  let csrfToken = '';
-  let requestCookieString = '';
+async function captureCredentials(
+  networkSession: Session,
+  requestCookieString: string,
+  csrfToken: string,
+): Promise<Credentials> {
+  const cookieBuckets = await Promise.all([
+    networkSession.cookies.get({ url: `${FEISHU_API_BASE_URL}/app/list` }),
+    networkSession.cookies.get({ url: FEISHU_OPEN_BASE_URL }),
+    networkSession.cookies.get({ url: FEISHU_PASSPORT_BASE_URL }),
+    networkSession.cookies.get({ url: FEISHU_ACCOUNTS_BASE_URL }),
+  ]);
 
-  const onRequest = (request: Request) => {
-    if (!request.url().includes('/developers/')) return;
-    const headers = request.headers();
-    if (!requestCookieString && typeof headers.cookie === 'string' && headers.cookie.trim()) {
-      requestCookieString = headers.cookie.trim();
+  const mergedCookies = new Map<string, { name: string; value: string }>();
+  for (const bucket of cookieBuckets) {
+    for (const cookie of bucket) {
+      mergedCookies.set(`${cookie.domain}|${cookie.path}|${cookie.name}`, {
+        name: cookie.name,
+        value: cookie.value,
+      });
     }
-    if (!csrfToken && typeof headers['x-csrf-token'] === 'string' && headers['x-csrf-token'].trim()) {
-      csrfToken = headers['x-csrf-token'].trim();
-    }
-  };
-
-  context.on('request', onRequest);
-  try {
-    await page.goto(FEISHU_APP_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-
-    const deadline = Date.now() + 15_000;
-    while (!csrfToken && Date.now() < deadline) {
-      await page.waitForTimeout(250);
-    }
-
-    const cookies = await context.cookies([
-      FEISHU_OPEN_BASE_URL,
-      FEISHU_PASSPORT_BASE_URL,
-      FEISHU_ACCOUNTS_BASE_URL,
-    ]);
-    const contextCookieString = buildCookieStringFromContextCookies(cookies);
-    const mergedCookieString = buildMergedCookieString(requestCookieString, contextCookieString);
-    const csrfCookie = cookies.find((cookie) => cookie.name === 'lark_oapi_csrf_token' || cookie.name === 'swp_csrf_token');
-    const finalCsrfToken = csrfToken || csrfCookie?.value?.trim() || '';
-
-    if (!mergedCookieString) {
-      throw new Error('Failed to capture Feishu cookies after login.');
-    }
-    if (!finalCsrfToken) {
-      throw new Error('Failed to capture the Feishu CSRF token after login.');
-    }
-
-    const cookieString = mergedCookieString.includes('lark_oapi_csrf_token=')
-      ? mergedCookieString
-      : `${mergedCookieString}; lark_oapi_csrf_token=${finalCsrfToken}`;
-
-    return {
-      cookieString,
-      csrfToken: finalCsrfToken,
-      savedAt: Date.now(),
-    };
-  } finally {
-    context.off('request', onRequest);
   }
+
+  const contextCookieString = buildCookieStringFromContextCookies(Array.from(mergedCookies.values()));
+  const mergedCookieString = buildMergedCookieString(requestCookieString, contextCookieString);
+  const csrfCookie = Array.from(mergedCookies.values()).find((cookie) => cookie.name === 'lark_oapi_csrf_token' || cookie.name === 'swp_csrf_token');
+  const finalCsrfToken = csrfToken || csrfCookie?.value?.trim() || '';
+
+  if (!mergedCookieString) {
+    throw new Error('Failed to capture Feishu cookies after login.');
+  }
+  if (!finalCsrfToken) {
+    throw new Error('Failed to capture the Feishu CSRF token after login.');
+  }
+
+  const cookieString = mergedCookieString.includes('lark_oapi_csrf_token=')
+    ? mergedCookieString
+    : `${mergedCookieString}; lark_oapi_csrf_token=${finalCsrfToken}`;
+
+  return {
+    cookieString,
+    csrfToken: finalCsrfToken,
+    savedAt: Date.now(),
+  };
 }
 
 class FeishuAutoCreateSession extends EventEmitter {
@@ -823,21 +925,38 @@ class FeishuAutoCreateSession extends EventEmitter {
 
   private readonly firstQr = createDeferred<string>();
   private readonly completion = createDeferred<FeishuAutoCreateResult>();
-  private readonly tempUserDataDirPromise = mkdtemp(join(tmpdir(), 'tnyma-feishu-auto-create-'));
   private readonly runPromise: Promise<void>;
+  private readonly sessionPartition = `feishu-auto-create:${this.sessionKey}`;
+  private readonly trackedResponseUrls = new Map<string, string>();
   private cancelled = false;
   private closed = false;
-  private context: BrowserContext | null = null;
-  private page: Page | null = null;
+  private cleanupPromise: Promise<void> | null = null;
+  private networkSession: Session | null = null;
+  private qrWindow: BrowserWindow | null = null;
   private latestQrDataUrl: string | null = null;
   private refreshInFlight: Promise<void> | null = null;
   private credentialsReadyHook: ((payload: FeishuCredentialsReadyPayload) => void | Promise<void>) | null = null;
   private firstQrDelivered = false;
+  private requestCookieString = '';
+  private csrfToken = '';
+  private scanCompleted = false;
+
+  private readonly onDebuggerMessage = (_event: unknown, method: string, params: Record<string, unknown>) => {
+    void this.handleDebuggerMessage(method, params).catch((error) => {
+      if (this.cancelled || this.closed) {
+        return;
+      }
+      this.fail(error);
+    });
+  };
 
   constructor(private readonly options: FeishuAutoCreateStartOptions) {
     super();
     this.runPromise = this.run();
     this.runPromise.catch((error) => {
+      if (this.cancelled || this.closed) {
+        return;
+      }
       this.fail(error);
     });
   }
@@ -907,48 +1026,49 @@ class FeishuAutoCreateSession extends EventEmitter {
   }
 
   async cancel(): Promise<void> {
+    if (this.cancelled) {
+      await this.cleanup();
+      return;
+    }
     this.cancelled = true;
+    const error = new Error('Feishu login was cancelled.');
+    if (!this.closed) {
+      this.closed = true;
+      this.firstQr.reject(error);
+      this.completion.reject(error);
+    }
     await this.cleanup();
   }
 
   private async run(): Promise<void> {
     this.publishProgress('waiting_for_scan', 'running');
 
-    const { chromium } = await import('playwright-core');
-    const executablePath = findChromeExecutable();
-    const userDataDir = await this.tempUserDataDirPromise;
+    this.networkSession = await createRequestSession(this.sessionPartition);
+    this.bindDeveloperRequestCapture();
+    this.qrWindow = await createHiddenWindow(this.sessionPartition);
+    this.bindWindowLifecycleHandlers(this.qrWindow);
+    await this.attachDebugger();
+    await this.qrWindow.loadURL(buildLoginUrl(FEISHU_APP_LIST_URL));
 
-    this.context = await chromium.launchPersistentContext(userDataDir, {
-      executablePath,
-      headless: true,
-      viewport: { width: 960, height: 720 },
-      args: [
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-blink-features=AutomationControlled',
-      ],
-    });
-
-    this.page = this.context.pages()[0] ?? await this.context.newPage();
-    this.page.on('response', (response) => {
-      void this.handleResponse(response);
-    });
-
-    await this.page.goto(buildLoginUrl(FEISHU_APP_LIST_URL), {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
-
-    await waitForOpenPlatformNavigation(this.page);
+    await waitForOpenPlatformNavigation(this.qrWindow.webContents);
 
     if (this.cancelled) {
       throw new Error('Feishu login was cancelled.');
     }
 
+    this.scanCompleted = true;
     this.publishProgress('waiting_for_scan', 'completed');
     this.publishProgress('creating_bot', 'running');
 
-    const creds = await captureCredentials(this.context, this.page);
+    await this.qrWindow.loadURL(FEISHU_APP_LIST_URL);
+    await delay(1_500);
+
+    const captureDeadline = Date.now() + 10_000;
+    while (!this.csrfToken && Date.now() < captureDeadline) {
+      await delay(250);
+    }
+
+    const creds = await captureCredentials(this.networkSession, this.requestCookieString, this.csrfToken);
     const name = normalizeAppName(this.options.appName);
     const desc = normalizeAppDescription(this.options.appDescription);
     const avatar = await uploadDefaultAvatar(creds);
@@ -988,41 +1108,186 @@ class FeishuAutoCreateSession extends EventEmitter {
     });
   }
 
-  private async handleResponse(response: Response): Promise<void> {
-    if (this.cancelled || !this.page) return;
+  private bindDeveloperRequestCapture(): void {
+    if (!this.networkSession) {
+      return;
+    }
 
-    const url = response.url();
-    if (!url.startsWith(FEISHU_ACCOUNTS_BASE_URL)) return;
-    if (response.request().resourceType() !== 'fetch' && response.request().resourceType() !== 'xhr') return;
+    this.networkSession.webRequest.onBeforeSendHeaders(
+      { urls: [`${FEISHU_OPEN_BASE_URL}/developers/*`] },
+      (details, callback) => {
+        const headers = details.requestHeaders ?? {};
+        if (!this.requestCookieString) {
+          const cookie = readHeaderValue(headers, 'cookie');
+          if (cookie) {
+            this.requestCookieString = cookie;
+          }
+        }
+        if (!this.csrfToken) {
+          const csrf = readHeaderValue(headers, 'x-csrf-token');
+          if (csrf) {
+            this.csrfToken = csrf;
+          }
+        }
+        callback({ requestHeaders: details.requestHeaders });
+      },
+    );
+  }
 
-    if (url.includes('/accounts/qrlogin/init')) {
-      await delay(QR_CAPTURE_DELAY_MS);
-      const qrcodeUrl = await captureQrDataUrlWithRetry(this.page);
-      if (qrcodeUrl) {
-        this.publishQr(qrcodeUrl);
+  private bindWindowLifecycleHandlers(qrWindow: BrowserWindow): void {
+    qrWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || this.cancelled || this.closed) {
+        return;
+      }
+      this.fail(new Error(`Feishu login page failed to load (${errorCode}): ${errorDescription || validatedURL}`));
+    });
+
+    qrWindow.webContents.on('render-process-gone', (_event, details) => {
+      if (this.cancelled || this.closed) {
+        return;
+      }
+      this.fail(new Error(`Feishu login page crashed: ${details.reason}`));
+    });
+
+    qrWindow.on('closed', () => {
+      if (this.cancelled || this.closed) {
+        return;
+      }
+      this.fail(new Error('Feishu login window closed unexpectedly.'));
+    });
+  }
+
+  private async attachDebugger(): Promise<void> {
+    if (!this.qrWindow) {
+      throw new Error('Feishu hidden window was not created.');
+    }
+
+    const { debugger: debuggerApi } = this.qrWindow.webContents;
+    if (!debuggerApi.isAttached()) {
+      debuggerApi.attach('1.3');
+    }
+    debuggerApi.on('message', this.onDebuggerMessage);
+    await debuggerApi.sendCommand('Network.enable');
+  }
+
+  private async safeDebuggerCommand<T>(command: string, params?: Record<string, unknown>): Promise<T | null> {
+    const qrWindow = this.qrWindow;
+    if (!qrWindow || qrWindow.isDestroyed() || qrWindow.webContents.isDestroyed()) {
+      return null;
+    }
+
+    const debuggerApi = qrWindow.webContents.debugger;
+    if (!debuggerApi.isAttached()) {
+      return null;
+    }
+
+    try {
+      return await debuggerApi.sendCommand(command, params) as T;
+    } catch (error) {
+      if (!this.cancelled && !this.closed) {
+        logger.warn(`Feishu debugger command failed: ${command}`, error);
+      }
+      return null;
+    }
+  }
+
+  private async handleDebuggerMessage(method: string, params: Record<string, unknown>): Promise<void> {
+    if (this.cancelled || this.closed) {
+      return;
+    }
+    if (!this.qrWindow) {
+      return;
+    }
+
+    if (method === 'Network.responseReceived') {
+      const requestId = typeof params?.requestId === 'string' ? params.requestId : '';
+      const url = typeof params?.response?.url === 'string' ? params.response.url : '';
+      if (!requestId || !url.startsWith(FEISHU_ACCOUNTS_BASE_URL)) {
+        return;
+      }
+      if (!url.includes('/accounts/qrlogin/init') && !url.includes('/accounts/qrlogin/polling')) {
+        return;
+      }
+      this.trackedResponseUrls.set(requestId, url);
+      return;
+    }
+
+    if (method === 'Network.loadingFailed') {
+      const requestId = typeof params?.requestId === 'string' ? params.requestId : '';
+      if (requestId) {
+        this.trackedResponseUrls.delete(requestId);
       }
       return;
     }
 
-    if (!url.includes('/accounts/qrlogin/polling')) return;
+    if (method !== 'Network.loadingFinished') {
+      return;
+    }
 
-    try {
-      const payload = await response.json() as {
-        code?: number;
-        data?: {
-          step_info?: {
-            status?: number;
-          };
+    const requestId = typeof params?.requestId === 'string' ? params.requestId : '';
+    const url = this.trackedResponseUrls.get(requestId);
+    if (!requestId || !url) {
+      return;
+    }
+
+    this.trackedResponseUrls.delete(requestId);
+    const bodyResult = await this.safeDebuggerCommand<{ body?: string; base64Encoded?: boolean }>('Network.getResponseBody', { requestId });
+    if (!bodyResult || typeof bodyResult.body !== 'string') {
+      return;
+    }
+
+    const body = bodyResult.base64Encoded
+      ? Buffer.from(bodyResult.body, 'base64').toString('utf8')
+      : bodyResult.body;
+    await this.handleTrackedResponse(url, body);
+  }
+
+  private async handleTrackedResponse(url: string, body: string): Promise<void> {
+    if (this.cancelled || this.closed || !this.qrWindow || this.scanCompleted) {
+      return;
+    }
+
+    let payload: {
+      code?: number;
+      data?: {
+        step_info?: {
+          status?: number;
+          token?: string;
         };
       };
+    };
 
-      const status = payload?.data?.step_info?.status;
-      if (status === 5) {
-        this.publishProgress('waiting_for_scan', 'running');
-        await this.refreshQr();
-      }
+    try {
+      payload = JSON.parse(body) as typeof payload;
     } catch {
-      // Ignore transient parsing failures from polling requests.
+      return;
+    }
+
+    if (url.includes('/accounts/qrlogin/init')) {
+      const token = payload?.data?.step_info?.token?.trim();
+      if (token) {
+        try {
+          const qrContent = buildQrContentFromToken(token);
+          const qrcodeUrl = renderQrPngDataUrl(qrContent);
+          this.publishQr(qrcodeUrl);
+          logger.info('Rendered Feishu QR code from init token');
+        } catch (error) {
+          logger.warn('Failed to render Feishu QR code from token:', error);
+        }
+      } else {
+        logger.warn('Feishu qrlogin/init response did not contain a token');
+      }
+      return;
+    }
+
+    if (!url.includes('/accounts/qrlogin/polling')) {
+      return;
+    }
+
+    const status = payload?.data?.step_info?.status;
+    if (status === 5) {
+      this.publishProgress('waiting_for_scan', 'running');
+      await this.refreshQr();
     }
   }
 
@@ -1040,13 +1305,23 @@ class FeishuAutoCreateSession extends EventEmitter {
   }
 
   private async refreshQr(): Promise<void> {
-    if (this.refreshInFlight || !this.page || this.cancelled) {
+    if (this.refreshInFlight || !this.qrWindow || this.cancelled || this.scanCompleted) {
       return;
     }
 
     this.refreshInFlight = (async () => {
       try {
-        await this.page?.reload({ waitUntil: 'domcontentloaded', timeout: 60_000 });
+        const qrWindow = this.qrWindow;
+        if (!qrWindow || qrWindow.isDestroyed()) {
+          return;
+        }
+        // Reload the login page. The new /qrlogin/init response will be
+        // intercepted by handleTrackedResponse which captures the QR image.
+        await qrWindow.loadURL(buildLoginUrl(FEISHU_APP_LIST_URL));
+      } catch (error) {
+        if (!this.cancelled && !this.closed) {
+          throw error;
+        }
       } finally {
         this.refreshInFlight = null;
       }
@@ -1072,21 +1347,47 @@ class FeishuAutoCreateSession extends EventEmitter {
   }
 
   private async cleanup(): Promise<void> {
-    const context = this.context;
-    this.context = null;
-    this.page = null;
-
-    if (context) {
-      try {
-        await context.close();
-      } catch {
-        // Ignore close errors during cancellation/shutdown.
-      }
+    if (this.cleanupPromise) {
+      await this.cleanupPromise;
+      return;
     }
 
-    const userDataDir = await this.tempUserDataDirPromise.catch(() => null);
-    if (userDataDir) {
-      await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+    this.cleanupPromise = (async () => {
+      const qrWindow = this.qrWindow;
+      this.qrWindow = null;
+
+      if (qrWindow && !qrWindow.isDestroyed()) {
+        try {
+          const { debugger: debuggerApi } = qrWindow.webContents;
+          debuggerApi.off('message', this.onDebuggerMessage);
+          if (debuggerApi.isAttached()) {
+            debuggerApi.detach();
+          }
+        } catch {
+          // Ignore debugger detach errors during shutdown.
+        }
+
+        try {
+          qrWindow.destroy();
+        } catch {
+          // Ignore window destroy errors during shutdown.
+        }
+      }
+
+      const networkSession = this.networkSession;
+      this.networkSession = null;
+      this.trackedResponseUrls.clear();
+
+      if (networkSession) {
+        await networkSession.clearStorageData().catch(() => {});
+        await networkSession.closeAllConnections().catch(() => {});
+      }
+    })();
+
+    try {
+      await this.cleanupPromise;
+    } finally {
+      this.cleanupPromise = null;
     }
   }
 }
