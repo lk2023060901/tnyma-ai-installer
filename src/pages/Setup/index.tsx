@@ -39,6 +39,7 @@ import { toast } from 'sonner';
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
+import { waitForGatewayReady } from '@/lib/gateway-ready';
 interface SetupStep {
   id: string;
   title: string;
@@ -146,7 +147,7 @@ import qqIcon from '@/assets/channels/qq.svg';
 
 // Use the shared provider registry for setup providers
 const providers = SETUP_PROVIDERS;
-const CONTROL_UI_POLL_RETRIES = 12;
+const CONTROL_UI_POLL_RETRIES = 5;
 const CONTROL_UI_POLL_INTERVAL_MS = 1000;
 type SetupManagedChannelType = Extract<ChannelType, 'feishu' | 'qqbot'>;
 type SetupChannelMode = 'auto' | 'manual';
@@ -208,14 +209,11 @@ async function fetchControlUiUrl(): Promise<string> {
 }
 
 async function waitForControlUiUrl(retries = CONTROL_UI_POLL_RETRIES): Promise<string> {
+  await waitForGatewayReady({ startIfNeeded: false });
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
     try {
-      const health = await hostApiFetch<{ ok: boolean; error?: string }>('/api/gateway/health');
-      if (!health.ok) {
-        throw new Error(health.error || 'Gateway is not healthy yet');
-      }
       return await fetchControlUiUrl();
     } catch (error) {
       lastError = error;
@@ -231,13 +229,17 @@ async function waitForControlUiUrl(retries = CONTROL_UI_POLL_RETRIES): Promise<s
 }
 
 async function ensureGatewayRunning(): Promise<void> {
-  const gatewayState = useGatewayStore.getState();
-  const currentStatus = gatewayState.status.state;
-  if (currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'reconnecting') {
+  await useGatewayStore.getState().init();
+  const currentStatus = useGatewayStore.getState().status.state;
+
+  if (currentStatus === 'error') {
+    await useGatewayStore.getState().restart();
     return;
   }
 
-  await gatewayState.start();
+  if (currentStatus === 'stopped') {
+    await useGatewayStore.getState().start();
+  }
 }
 
 function getProtocolBaseUrlPlaceholder(

@@ -1,5 +1,6 @@
 import type { ProviderAccount } from '@/lib/providers';
 import { hostApiFetch } from '@/lib/host-api';
+import { waitForGatewayReady } from '@/lib/gateway-ready';
 
 export interface ProviderModelCatalogEntry {
   id: string;
@@ -12,10 +13,6 @@ export interface ProviderModelCatalogEntry {
 
 const PROVIDER_MODELS_HEALTH_RETRIES = 10;
 const PROVIDER_MODELS_HEALTH_DELAY_MS = 800;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export function getStoredProviderModels(
   account: Pick<ProviderAccount, 'metadata'> | null | undefined,
@@ -46,24 +43,11 @@ export function resolvePreferredProviderModelId(params: {
 }
 
 export async function ensureGatewayReadyForProviderModels(): Promise<void> {
-  const startResult = await hostApiFetch<{ success: boolean; error?: string }>('/api/gateway/start', {
-    method: 'POST',
+  await waitForGatewayReady({
+    retries: PROVIDER_MODELS_HEALTH_RETRIES,
+    intervalMs: PROVIDER_MODELS_HEALTH_DELAY_MS,
+    startIfNeeded: true,
   });
-  if (!startResult.success) {
-    throw new Error(startResult.error || 'Failed to start gateway');
-  }
-
-  let lastError: string | undefined;
-  for (let attempt = 0; attempt < PROVIDER_MODELS_HEALTH_RETRIES; attempt += 1) {
-    const health = await hostApiFetch<{ ok: boolean; error?: string }>('/api/gateway/health');
-    if (health.ok) {
-      return;
-    }
-    lastError = health.error;
-    await delay(PROVIDER_MODELS_HEALTH_DELAY_MS);
-  }
-
-  throw new Error(lastError || 'Gateway is not ready');
 }
 
 export async function fetchProviderModels(
