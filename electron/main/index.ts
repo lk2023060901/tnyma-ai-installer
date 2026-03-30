@@ -11,7 +11,7 @@ import { createTray } from './tray';
 import { createMenu } from './menu';
 
 import { appUpdater, registerUpdateHandlers } from './updater';
-import { logger } from '../utils/logger';
+import { initLogger, logger } from '../utils/logger';
 import { warmupNetworkOptimization } from '../utils/uv-env';
 import { initTelemetry } from '../utils/telemetry';
 
@@ -45,6 +45,8 @@ import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { syncAllProviderAuthToRuntime } from '../services/providers/provider-runtime-sync';
 
 const WINDOWS_APP_USER_MODEL_ID = 'app.tnyma-ai.desktop';
+
+initLogger();
 
 // Disable GPU hardware acceleration globally for maximum stability across
 // all GPU configurations (no GPU, integrated, discrete).
