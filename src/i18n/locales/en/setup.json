@@ -180,6 +180,11 @@
         "running": "Running",
         "footer": "Select Open Control UI to launch the OpenClaw Control UI."
     },
+    "launcher": {
+        "title": "OpenClaw Is Ready",
+        "subtitle": "Setup is complete. The setup wizard stays hidden now and this window only opens the Control UI.",
+        "opening": "Opening..."
+    },
     "nav": {
         "next": "Next",
         "back": "Back",

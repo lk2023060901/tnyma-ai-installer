@@ -132,6 +132,7 @@ Light mode, dark mode, or system-synchronized themes. TnymaAI adapts to your pre
 ### 🚀 Startup Launch Control
 In **Settings → General**, you can enable **Launch at system startup** so TnymaAI starts automatically in the background after login.
 When **Gateway auto-start** is still enabled, the background launch restores OpenClaw Gateway automatically without reopening the setup wizard.
+After setup has been completed once, reopening TnymaAI shows a lightweight Control UI launcher instead of the multi-step setup wizard.
 
 ---
 

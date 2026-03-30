@@ -180,6 +180,11 @@
         "running": "実行中",
         "footer": "「Control UI を開く」を選択すると OpenClaw Control UI を起動します"
     },
+    "launcher": {
+        "title": "OpenClaw の準備ができました",
+        "subtitle": "セットアップは完了しています。ここではセットアップウィザードを再表示せず、Control UI を開く入口だけを表示します。",
+        "opening": "開いています..."
+    },
     "nav": {
         "next": "次へ",
         "back": "戻る",

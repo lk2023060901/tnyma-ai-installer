@@ -180,6 +180,11 @@
         "running": "运行中",
         "footer": "点击“打开 Control UI”即可进入 OpenClaw Control UI。"
     },
+    "launcher": {
+        "title": "OpenClaw 已准备就绪",
+        "subtitle": "配置已完成。这里不再显示安装向导，只保留打开 Control UI 的入口。",
+        "opening": "正在打开..."
+    },
     "nav": {
         "next": "下一步",
         "back": "返回",

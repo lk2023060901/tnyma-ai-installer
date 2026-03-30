@@ -130,6 +130,8 @@ import {
   ensureGatewayReadyForProviderModels,
   fetchProviderModels,
   getStoredProviderModels,
+  requiresManualProviderModelEntry,
+  supportsProviderModelCatalog,
   type ProviderModelCatalogEntry,
 } from '@/lib/provider-models';
 import {
@@ -268,6 +270,7 @@ export function Setup() {
   const { t } = useTranslation(['setup', 'channels']);
   const setupComplete = useSettingsStore((state) => state.setupComplete);
   const markSetupComplete = useSettingsStore((state) => state.markSetupComplete);
+  const [openingControlUi, setOpeningControlUi] = useState(false);
   const [currentStep, setCurrentStep] = useState<number>(
     setupComplete ? STEP.COMPLETE : STEP.WELCOME,
   );
@@ -323,12 +326,21 @@ export function Setup() {
   }, [setupComplete]);
 
   const openControlUi = useCallback(async () => {
-    await persistBackgroundGatewayStartupSettings();
-    await ensureGatewayRunning();
-    const controlUiUrl = await waitForControlUiUrl();
-    await invokeIpc('shell:openExternal', controlUiUrl);
-    await invokeIpc('window:close');
-  }, []);
+    if (openingControlUi) {
+      return;
+    }
+
+    setOpeningControlUi(true);
+    try {
+      await persistBackgroundGatewayStartupSettings();
+      await ensureGatewayRunning();
+      const controlUiUrl = await waitForControlUiUrl();
+      await invokeIpc('shell:openExternal', controlUiUrl);
+      await invokeIpc('window:close');
+    } finally {
+      setOpeningControlUi(false);
+    }
+  }, [openingControlUi]);
 
   const handleNext = async () => {
     if (isLastStep) {
@@ -404,6 +416,20 @@ export function Setup() {
     }, 1000);
   }, []);
 
+  if (setupComplete) {
+    return (
+      <SetupLauncher
+        isOpening={openingControlUi}
+        onOpen={async () => {
+          try {
+            await openControlUi();
+          } catch (error) {
+            toast.error(String(error));
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
@@ -2009,9 +2035,12 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
 
   const providerData = providers.find((provider) => provider.id === (account?.vendorId ?? selectedProvider));
   const hasDiscoveredModels = availableModels.length > 0;
-  const showModelIdField = shouldShowProviderModelId(providerData, devModeUnlocked) || hasDiscoveredModels;
+  const showModelIdField = shouldShowProviderModelId(providerData, devModeUnlocked)
+    || hasDiscoveredModels
+    || requiresManualProviderModelEntry(account);
   const effectiveModelId = modelId.trim();
   const canProceed = Boolean(account && effectiveModelId);
+  const canSyncModels = supportsProviderModelCatalog(account);
 
   useEffect(() => {
     onCanProceedChange(canProceed);
@@ -2020,6 +2049,18 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
   const loadModels = useCallback(async (nextAccount: ProviderAccount) => {
     const nextProvider = providers.find((provider) => provider.id === nextAccount.vendorId);
     const fallbackModels = getStoredProviderModels(nextAccount);
+    const fallbackModelId = nextAccount.model?.trim()
+      || nextProvider?.defaultModelId?.trim()
+      || fallbackModels[0]?.id
+      || '';
+
+    if (!supportsProviderModelCatalog(nextAccount)) {
+      setAccount(nextAccount);
+      setAvailableModels([]);
+      setModelId(fallbackModelId);
+      setLoadError(null);
+      return;
+    }
 
     setModelsLoading(true);
     setLoadError(null);
@@ -2042,10 +2083,6 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
       setModelId(resolvedModelId);
     } catch (error) {
       console.error('Failed to load provider models:', error);
-      const fallbackModelId = nextAccount.model?.trim()
-        || nextProvider?.defaultModelId?.trim()
-        || fallbackModels[0]?.id
-        || '';
       setAccount(nextAccount);
       setAvailableModels(fallbackModels);
       setModelId(fallbackModelId);
@@ -2148,7 +2185,7 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <Label htmlFor="setup-model-id">{t('provider.modelId')}</Label>
-          {account && (
+          {account && canSyncModels && (
             <Button
               type="button"
               variant="ghost"
@@ -3038,6 +3075,49 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
 interface CompleteContentProps {
   selectedProvider: string | null;
   installedSkills: string[];
+}
+
+interface SetupLauncherProps {
+  isOpening: boolean;
+  onOpen: () => Promise<void>;
+}
+
+function SetupLauncher({ isOpening, onOpen }: SetupLauncherProps) {
+  const { t } = useTranslation('setup');
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      <TitleBar />
+      <div className="flex flex-1 items-center justify-center p-8">
+        <div className="w-full max-w-md rounded-2xl border bg-card p-10 text-center shadow-sm">
+          <div className="mb-6 flex justify-center">
+            <img src={appIcon} alt="TnymaAI" className="h-14 w-14" />
+          </div>
+          <h1 className="text-2xl font-semibold">{t('launcher.title')}</h1>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t('launcher.subtitle')}
+          </p>
+          <Button
+            className="mt-8 w-full"
+            size="lg"
+            disabled={isOpening}
+            onClick={() => {
+              void onOpen();
+            }}
+          >
+            {isOpening ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {t('launcher.opening')}
+              </>
+            ) : (
+              t('nav.getStarted')
+            )}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function CompleteContent({ selectedProvider, installedSkills }: CompleteContentProps) {

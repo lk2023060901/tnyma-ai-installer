@@ -48,6 +48,8 @@ import {
 } from '@/lib/provider-accounts';
 import {
   getStoredProviderModels,
+  requiresManualProviderModelEntry,
+  supportsProviderModelCatalog,
   syncProviderModelsToAccount,
   type ProviderModelCatalogEntry,
 } from '@/lib/provider-models';
@@ -395,7 +397,8 @@ function ProviderCard({
 
   const typeInfo = PROVIDER_TYPE_INFO.find((t) => t.id === account.vendorId);
   const providerDocsUrl = getProviderDocsUrl(typeInfo, i18n.language);
-  const showModelIdField = shouldShowProviderModelId(typeInfo, devModeUnlocked);
+  const showModelIdField = shouldShowProviderModelId(typeInfo, devModeUnlocked)
+    || requiresManualProviderModelEntry(account);
   const codePlanPreset = typeInfo?.codePlanPresetBaseUrl && typeInfo?.codePlanPresetModelId
     ? {
       baseUrl: typeInfo.codePlanPresetBaseUrl,
@@ -408,6 +411,7 @@ function ProviderCard({
   const hasDiscoveredModels = availableModels.length > 0;
   const canEditModelConfig = Boolean(typeInfo?.showBaseUrl || showModelIdField || hasDiscoveredModels);
   const showUserAgentField = shouldShowUserAgentField(account);
+  const canSyncModels = supportsProviderModelCatalog(account);
 
   const refreshProviderModels = async () => {
     setModelsLoading(true);
@@ -678,17 +682,19 @@ function ProviderCard({
                 <div className="space-y-1.5 pt-2">
                   <div className="flex items-center justify-between gap-2">
                     <Label className={currentLabelClasses}>{t('aiProviders.dialog.modelId')}</Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2 text-[12px]"
-                      onClick={refreshProviderModels}
-                      disabled={modelsLoading}
-                    >
-                      {modelsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                      <span className="ml-1">{t('aiProviders.dialog.refreshModels')}</span>
-                    </Button>
+                    {canSyncModels && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-[12px]"
+                        onClick={refreshProviderModels}
+                        disabled={modelsLoading}
+                      >
+                        {modelsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        <span className="ml-1">{t('aiProviders.dialog.refreshModels')}</span>
+                      </Button>
+                    )}
                   </div>
                   {hasDiscoveredModels ? (
                     <Select

@@ -14,9 +14,24 @@ export interface ProviderModelCatalogEntry {
 const PROVIDER_MODELS_HEALTH_RETRIES = 10;
 const PROVIDER_MODELS_HEALTH_DELAY_MS = 800;
 
+export function supportsProviderModelCatalog(
+  account: Pick<ProviderAccount, 'authMode'> | null | undefined,
+): boolean {
+  return account?.authMode !== 'oauth_browser';
+}
+
+export function requiresManualProviderModelEntry(
+  account: Pick<ProviderAccount, 'authMode'> | null | undefined,
+): boolean {
+  return !supportsProviderModelCatalog(account);
+}
+
 export function getStoredProviderModels(
-  account: Pick<ProviderAccount, 'metadata'> | null | undefined,
+  account: Pick<ProviderAccount, 'authMode' | 'metadata'> | null | undefined,
 ): ProviderModelCatalogEntry[] {
+  if (!supportsProviderModelCatalog(account)) {
+    return [];
+  }
   return (account?.metadata?.customModels ?? []).map((id) => ({
     id,
     name: id,
@@ -76,6 +91,12 @@ export async function syncProviderModelsToAccount(params: {
   );
   if (!account) {
     throw new Error('Provider account not found');
+  }
+  if (!supportsProviderModelCatalog(account)) {
+    return {
+      models: [],
+      selectedModelId: account.model?.trim() || params.defaultModelId?.trim(),
+    };
   }
 
   const models = await fetchProviderModels(params.accountId);
