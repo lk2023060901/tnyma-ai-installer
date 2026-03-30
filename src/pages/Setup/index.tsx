@@ -242,6 +242,16 @@ async function ensureGatewayRunning(): Promise<void> {
   }
 }
 
+const BACKGROUND_GATEWAY_STARTUP_SETTINGS = {
+  gatewayAutoStart: true,
+  launchAtStartup: true,
+} as const;
+
+async function persistBackgroundGatewayStartupSettings(): Promise<void> {
+  useSettingsStore.setState(BACKGROUND_GATEWAY_STARTUP_SETTINGS);
+  await invokeIpc('settings:setMany', BACKGROUND_GATEWAY_STARTUP_SETTINGS);
+}
+
 function getProtocolBaseUrlPlaceholder(
   apiProtocol: ProviderAccount['apiProtocol'],
 ): string {
@@ -258,7 +268,6 @@ export function Setup() {
   const { t } = useTranslation(['setup', 'channels']);
   const setupComplete = useSettingsStore((state) => state.setupComplete);
   const markSetupComplete = useSettingsStore((state) => state.markSetupComplete);
-  const setGatewayAutoStart = useSettingsStore((state) => state.setGatewayAutoStart);
   const [currentStep, setCurrentStep] = useState<number>(
     setupComplete ? STEP.COMPLETE : STEP.WELCOME,
   );
@@ -314,11 +323,12 @@ export function Setup() {
   }, [setupComplete]);
 
   const openControlUi = useCallback(async () => {
-    setGatewayAutoStart(true);
+    await persistBackgroundGatewayStartupSettings();
     await ensureGatewayRunning();
     const controlUiUrl = await waitForControlUiUrl();
     await invokeIpc('shell:openExternal', controlUiUrl);
-  }, [setGatewayAutoStart]);
+    await invokeIpc('window:close');
+  }, []);
 
   const handleNext = async () => {
     if (isLastStep) {
@@ -372,9 +382,11 @@ export function Setup() {
   };
 
   const handleSkip = () => {
-    setGatewayAutoStart(true);
     markSetupComplete();
     setCurrentStep(STEP.COMPLETE);
+    void persistBackgroundGatewayStartupSettings().catch((error) => {
+      toast.error(String(error));
+    });
   };
 
   const handleChannelConfigured = useCallback(() => {
@@ -2857,7 +2869,6 @@ interface InstallingContentProps {
 
 function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProps) {
   const { t } = useTranslation('setup');
-  const setGatewayAutoStart = useSettingsStore((state) => state.setGatewayAutoStart);
   const [skillStates, setSkillStates] = useState<SkillInstallState[]>(
     skills.map((s) => ({ ...s, status: 'pending' as InstallStatus }))
   );
@@ -2872,7 +2883,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
 
     const runRealInstall = async () => {
       try {
-        setGatewayAutoStart(true);
+        await persistBackgroundGatewayStartupSettings();
         setSkillStates(prev => prev.map(s => ({ ...s, status: 'installing' })));
         setOverallProgress(10);
 
@@ -2903,7 +2914,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
     };
 
     runRealInstall();
-  }, [onComplete, setGatewayAutoStart, skills]);
+  }, [onComplete, skills]);
 
   const getStatusIcon = (status: InstallStatus) => {
     switch (status) {

@@ -20,7 +20,7 @@ import { ensureTnymaAIContext, repairTnymaAIOnlyBootstrapFiles } from '../utils/
 import { autoInstallCliIfNeeded, generateCompletionCache, installCompletionToProfile } from '../utils/openclaw-cli';
 import { isQuitting, setQuitting } from './app-state';
 import { applyProxySettings } from './proxy';
-import { syncLaunchAtStartupSettingFromStore } from './launch-at-startup';
+import { isBackgroundLaunchRequested, syncLaunchAtStartupSettingFromStore } from './launch-at-startup';
 import {
   clearPendingSecondInstanceFocus,
   consumeMainWindowReady,
@@ -117,6 +117,7 @@ let hostEventBus!: HostEventBus;
 let hostApiServer: Server | null = null;
 const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
+const backgroundLaunchRequested = isBackgroundLaunchRequested();
 
 /**
  * Resolve the icons directory path (works in both dev and packaged mode)
@@ -225,6 +226,11 @@ function createMainWindow(): BrowserWindow {
       return;
     }
 
+    if (backgroundLaunchRequested) {
+      logger.info('Main window launch requested in background mode; keeping it hidden');
+      return;
+    }
+
     win.show();
   });
 
@@ -253,7 +259,7 @@ async function initialize(): Promise<void> {
   logger.init();
   logger.info('=== TnymaAI Application Starting ===');
   logger.debug(
-    `Runtime: platform=${process.platform}/${process.arch}, electron=${process.versions.electron}, node=${process.versions.node}, packaged=${app.isPackaged}, pid=${process.pid}, ppid=${process.ppid}`
+    `Runtime: platform=${process.platform}/${process.arch}, electron=${process.versions.electron}, node=${process.versions.node}, packaged=${app.isPackaged}, pid=${process.pid}, ppid=${process.ppid}, backgroundLaunch=${backgroundLaunchRequested}`
   );
 
   // Warm up network optimization (non-blocking)

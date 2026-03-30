@@ -10,7 +10,7 @@
     "system": "跟随系统",
     "language": "语言",
     "launchAtStartup": "开机自动启动",
-    "launchAtStartupDesc": "登录系统后自动启动 TnymaAI"
+    "launchAtStartupDesc": "登录系统后在后台自动启动 TnymaAI"
   },
   "aiProviders": {
     "title": "AI 模型提供商",

@@ -10,7 +10,7 @@
     "system": "System",
     "language": "Language",
     "launchAtStartup": "Launch at system startup",
-    "launchAtStartupDesc": "Automatically launch TnymaAI when you log in"
+    "launchAtStartupDesc": "Automatically launch TnymaAI in the background when you log in"
   },
   "aiProviders": {
     "title": "AI Providers",

@@ -130,7 +130,8 @@ For **Custom** providers used with OpenAI-compatible gateways, you can set a cus
 Light mode, dark mode, or system-synchronized themes. TnymaAI adapts to your preferences automatically.
 
 ### 🚀 Startup Launch Control
-In **Settings → General**, you can enable **Launch at system startup** so TnymaAI starts automatically after login.
+In **Settings → General**, you can enable **Launch at system startup** so TnymaAI starts automatically in the background after login.
+When **Gateway auto-start** is still enabled, the background launch restores OpenClaw Gateway automatically without reopening the setup wizard.
 
 ---
 

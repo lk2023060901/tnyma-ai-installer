@@ -5,6 +5,17 @@ import { logger } from '../utils/logger';
 import { getSetting } from '../utils/store';
 
 const LINUX_AUTOSTART_FILE = join('.config', 'autostart', 'tnyma-ai.desktop');
+const BACKGROUND_LAUNCH_ARG = '--background';
+
+function appendBackgroundLaunchArg(args: string[]): string[] {
+  return args.includes(BACKGROUND_LAUNCH_ARG)
+    ? args
+    : [...args, BACKGROUND_LAUNCH_ARG];
+}
+
+export function isBackgroundLaunchRequested(argv: string[] = process.argv): boolean {
+  return argv.includes(BACKGROUND_LAUNCH_ARG);
+}
 
 function quoteDesktopArg(value: string): string {
   if (!value) return '""';
@@ -16,11 +27,9 @@ function quoteDesktopArg(value: string): string {
 }
 
 function getLinuxExecCommand(): string {
-  if (app.isPackaged) {
-    return quoteDesktopArg(process.execPath);
-  }
-
-  const launchArgs = process.argv.slice(1).filter(Boolean);
+  const launchArgs = app.isPackaged
+    ? appendBackgroundLaunchArg([])
+    : appendBackgroundLaunchArg(process.argv.slice(1).filter(Boolean));
   const cmdParts = [process.execPath, ...launchArgs].map(quoteDesktopArg);
   return cmdParts.join(' ');
 }
@@ -56,7 +65,8 @@ async function applyLinuxLaunchAtStartup(enabled: boolean): Promise<void> {
 function applyWindowsOrMacLaunchAtStartup(enabled: boolean): void {
   app.setLoginItemSettings({
     openAtLogin: enabled,
-    openAsHidden: false,
+    openAsHidden: enabled,
+    args: enabled ? [BACKGROUND_LAUNCH_ARG] : [],
   });
   logger.info(`Launch-at-startup ${enabled ? 'enabled' : 'disabled'} via login items`);
 }

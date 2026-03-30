@@ -10,7 +10,7 @@
     "system": "システム",
     "language": "言語",
     "launchAtStartup": "システム起動時に自動起動",
-    "launchAtStartupDesc": "ログイン時に TnymaAI を自動的に起動します"
+    "launchAtStartupDesc": "ログイン時に TnymaAI をバックグラウンドで自動起動します"
   },
   "aiProviders": {
     "title": "AI プロバイダー",
