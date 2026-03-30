@@ -18,6 +18,8 @@ const FEISHU_ACCOUNTS_BASE_URL = 'https://accounts.feishu.cn';
 const FEISHU_OPEN_BASE_URL = 'https://open.feishu.cn';
 const FEISHU_PASSPORT_BASE_URL = 'https://passport.feishu.cn';
 const FEISHU_API_BASE_URL = `${FEISHU_OPEN_BASE_URL}/developers/v1`;
+const FEISHU_IM_API_BASE_URL = `${FEISHU_OPEN_BASE_URL}/open-apis/im/v1`;
+const FEISHU_TENANT_ACCESS_TOKEN_URL = `${FEISHU_OPEN_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal`;
 const FEISHU_APP_LIST_URL = `${FEISHU_OPEN_BASE_URL}/app`;
 const FEISHU_OPEN_ROOT_URL = `${FEISHU_OPEN_BASE_URL}/`;
 const FEISHU_QR_POLLING_STEP = 'qr_login_polling';
@@ -27,7 +29,10 @@ const LOGIN_TIMEOUT_MS = 8 * 60_000;
 const FIRST_QR_TIMEOUT_MS = 30_000;
 const SESSION_TIMEOUT_MS = 15 * 60_000;
 const DEBUGGER_ATTACH_TIMEOUT_MS = 3_000;
+const WELCOME_MESSAGE_TIMEOUT_MS = 10_000;
+const WELCOME_MESSAGE_RETRY_COUNT = 3;
 const DEFAULT_APP_DESCRIPTION = 'Created by TnymaAI';
+const DEFAULT_WELCOME_MESSAGE = '欢迎使用 TnymaAI！你的机器人已经创建完成，现在可以开始使用了。';
 const FEISHU_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 
@@ -252,6 +257,22 @@ type FeishuApiResponse<T> = {
   data: T;
 };
 
+type FeishuTenantAccessTokenResponse = {
+  code?: number;
+  msg?: string;
+  expire?: number;
+  tenant_access_token?: string;
+};
+
+type FeishuApplicationRecord = {
+  creator_id?: string;
+  owner?: {
+    owner_id?: string;
+    owner_type?: number;
+    type?: number;
+  };
+};
+
 type FeishuQrStepInfo = {
   status?: number;
   token?: string;
@@ -372,6 +393,14 @@ function normalizeAppDescription(value: string | null | undefined): string {
   return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_APP_DESCRIPTION;
 }
 
+function buildAutoCreateWelcomeMessage(botName: string): string {
+  const trimmed = botName.trim();
+  if (trimmed.length > 0) {
+    return `欢迎使用 ${trimmed}！我是由 TnymaAI 创建的机器人，现在已经准备就绪。`;
+  }
+  return DEFAULT_WELCOME_MESSAGE;
+}
+
 function buildLoginUrl(redirectUri: string): string {
   return `${FEISHU_ACCOUNTS_BASE_URL}/accounts/page/login?app_id=7&force_login=1&no_trap=1&redirect_uri=${encodeURIComponent(redirectUri)}`;
 }
@@ -419,6 +448,26 @@ async function fetchWithSession(
     ...init,
     credentials: 'include',
   });
+}
+
+async function proxyAwareFetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<globalThis.Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await proxyAwareFetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function executeOnLoginPage<T>(loginWindow: BrowserWindow, expression: string): Promise<T> {
@@ -608,19 +657,71 @@ function readHeaderValue(headers: Record<string, string | string[]>, ...names: s
   return '';
 }
 
+function isFeishuNavigationAbortError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('(-3)') || message.includes('ERR_ABORTED');
+}
+
+function getAllowedNavigationOrigins(requestedUrl: string): Set<string> {
+  const allowedOrigins = new Set<string>();
+  try {
+    const url = new URL(requestedUrl);
+    allowedOrigins.add(url.origin);
+    const redirectUri = url.searchParams.get('redirect_uri');
+    if (redirectUri) {
+      allowedOrigins.add(new URL(redirectUri).origin);
+    }
+  } catch {
+    // Ignore malformed URLs and let the caller time out naturally.
+  }
+  return allowedOrigins;
+}
+
+function matchesAllowedNavigationOrigin(currentUrl: string, requestedUrl: string): boolean {
+  if (!currentUrl) {
+    return false;
+  }
+  try {
+    const currentOrigin = new URL(currentUrl).origin;
+    return getAllowedNavigationOrigins(requestedUrl).has(currentOrigin);
+  } catch {
+    return false;
+  }
+}
+
 async function loadFeishuLoginPage(loginWindow: BrowserWindow, loginUrl: string): Promise<void> {
-  await loginWindow.loadURL(loginUrl, { userAgent: FEISHU_USER_AGENT });
+  let navigationAborted = false;
+  try {
+    await loginWindow.loadURL(loginUrl, { userAgent: FEISHU_USER_AGENT });
+  } catch (error) {
+    if (!isFeishuNavigationAbortError(error)) {
+      throw error;
+    }
+    navigationAborted = true;
+    logger.warn(`Feishu navigation reported ERR_ABORTED while loading ${loginUrl}; checking redirected page readiness`);
+  }
+
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
+    const currentUrl = loginWindow.webContents.getURL();
     const ready = await executeOnLoginPage<boolean>(
       loginWindow,
       'document.readyState === "complete" || document.readyState === "interactive"',
     ).catch(() => false);
-    if (ready) {
+    if (ready && (!navigationAborted || matchesAllowedNavigationOrigin(currentUrl, loginUrl))) {
       await delay(750);
+      if (navigationAborted) {
+        logger.info(`Feishu navigation continued after ERR_ABORTED: requested=${loginUrl} final=${currentUrl || 'unknown'}`);
+      }
       return;
     }
     await delay(250);
+  }
+  const finalUrl = loginWindow.webContents.getURL();
+  if (navigationAborted) {
+    throw new Error(
+      `Timed out waiting for the redirected Feishu page to load (requested=${loginUrl} final=${finalUrl || 'unknown'}).`,
+    );
   }
   throw new Error('Timed out waiting for the Feishu login page to load.');
 }
@@ -1141,6 +1242,143 @@ async function createVersionAndPublish(creds: Credentials, appId: string, creato
   return versionId;
 }
 
+async function fetchFeishuTenantAccessToken(appId: string, appSecret: string): Promise<string> {
+  const response = await proxyAwareFetchWithTimeout(
+    FEISHU_TENANT_ACCESS_TOKEN_URL,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': FEISHU_USER_AGENT,
+      },
+      body: JSON.stringify({
+        app_id: appId,
+        app_secret: appSecret,
+      }),
+    },
+    WELCOME_MESSAGE_TIMEOUT_MS,
+  );
+
+  const raw = await response.text();
+  let payload: FeishuTenantAccessTokenResponse;
+  try {
+    payload = JSON.parse(raw) as FeishuTenantAccessTokenResponse;
+  } catch (error) {
+    throw new Error(`Failed to parse Feishu tenant token response: ${String(error)}`, { cause: error });
+  }
+
+  if (!response.ok || payload.code !== 0 || !payload.tenant_access_token?.trim()) {
+    throw new Error(
+      `Failed to get Feishu tenant access token: HTTP ${response.status} code=${String(payload.code ?? 'unknown')} msg=${payload.msg || raw.slice(0, 200)}`,
+    );
+  }
+
+  return payload.tenant_access_token.trim();
+}
+
+async function fetchFeishuAppOwnerOpenId(appId: string, tenantAccessToken: string): Promise<string> {
+  const response = await proxyAwareFetchWithTimeout(
+    `${FEISHU_OPEN_BASE_URL}/open-apis/application/v6/applications/${encodeURIComponent(appId)}?lang=zh_cn`,
+    {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${tenantAccessToken}`,
+        'User-Agent': FEISHU_USER_AGENT,
+      },
+    },
+    WELCOME_MESSAGE_TIMEOUT_MS,
+  );
+
+  const payload = await parseJsonResponse<{ app?: FeishuApplicationRecord }>(
+    response,
+    `/open-apis/application/v6/applications/${appId}`,
+  );
+  const app = payload.data?.app;
+  const creatorId = app?.creator_id?.trim() || '';
+  const ownerId = app?.owner?.owner_id?.trim() || '';
+  const ownerType = app?.owner?.owner_type ?? app?.owner?.type;
+  const effectiveOwnerOpenId = ownerType === 2 && ownerId
+    ? ownerId
+    : (ownerId.startsWith('ou_') ? ownerId : (creatorId.startsWith('ou_') ? creatorId : ''));
+
+  if (!effectiveOwnerOpenId) {
+    throw new Error(
+      `Feishu application owner open_id was not available (ownerType=${String(ownerType ?? 'unknown')} ownerId=${ownerId || 'missing'} creatorId=${creatorId || 'missing'})`,
+    );
+  }
+
+  return effectiveOwnerOpenId;
+}
+
+function getFeishuReceiveIdTypes(creatorId: string): string[] {
+  if (creatorId.startsWith('ou_')) {
+    return ['open_id', 'user_id'];
+  }
+  return ['user_id', 'open_id'];
+}
+
+async function sendFeishuWelcomeMessage(
+  appId: string,
+  appSecret: string,
+  creatorId: string,
+  content: string,
+): Promise<void> {
+  const tenantAccessToken = await fetchFeishuTenantAccessToken(appId, appSecret);
+  const ownerOpenId = await fetchFeishuAppOwnerOpenId(appId, tenantAccessToken).catch((error) => {
+    logger.warn(`Feishu auto-create failed to resolve owner open_id from app info: ${String(error)}`);
+    return '';
+  });
+  const candidateIds = Array.from(new Set([ownerOpenId, creatorId].map((value) => value.trim()).filter(Boolean)));
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= WELCOME_MESSAGE_RETRY_COUNT; attempt += 1) {
+    for (const candidateId of candidateIds) {
+      const receiveIdTypes = getFeishuReceiveIdTypes(candidateId);
+      for (const receiveIdType of receiveIdTypes) {
+        try {
+          const response = await proxyAwareFetchWithTimeout(
+            `${FEISHU_IM_API_BASE_URL}/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`,
+            {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json',
+                Authorization: `Bearer ${tenantAccessToken}`,
+                'Content-Type': 'application/json',
+                'User-Agent': FEISHU_USER_AGENT,
+              },
+              body: JSON.stringify({
+                content: JSON.stringify({ text: content }),
+                msg_type: 'text',
+                receive_id: candidateId,
+              }),
+            },
+            WELCOME_MESSAGE_TIMEOUT_MS,
+          );
+          const payload = await parseJsonResponse<{ message_id?: string }>(
+            response,
+            `/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
+          );
+          const messageId = payload.data.message_id?.trim() || 'unknown';
+          logger.info(
+            `Feishu auto-create sent welcome message: appId=${appId} receiveIdType=${receiveIdType} receiveId=${candidateId} messageId=${messageId}`,
+          );
+          return;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+    }
+
+    if (attempt < WELCOME_MESSAGE_RETRY_COUNT) {
+      await delay(1_500);
+    }
+  }
+
+  throw lastError ?? new Error('Failed to send Feishu welcome message.');
+}
+
 class FeishuAutoCreateSession extends EventEmitter {
   readonly sessionKey = randomUUID();
 
@@ -1331,6 +1569,9 @@ class FeishuAutoCreateSession extends EventEmitter {
     const versionId = await createVersionAndPublish(creds, appId, creatorId);
     logger.info(`Feishu auto-create published app version: appId=${appId} versionId=${versionId}`);
     this.publishProgress('publishing_bot', 'completed');
+    await sendFeishuWelcomeMessage(appId, appSecret, creatorId, buildAutoCreateWelcomeMessage(name)).catch((error) => {
+      logger.warn(`Feishu auto-create welcome message failed: ${String(error)}`);
+    });
 
     this.complete({
       appId,

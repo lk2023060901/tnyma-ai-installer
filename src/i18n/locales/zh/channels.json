@@ -102,14 +102,14 @@
         "feishuManualMode": "手动填写 App ID",
         "feishuAutoHint": "扫码确认后，系统会自动创建机器人、开通权限、订阅事件并发布。",
         "feishuManualHint": "如果您已经在飞书开放平台准备好了应用凭证，可以直接手动填写。",
-        "feishuAutoNotice": "系统会在扫码登录后自动创建并发布飞书机器人，同时把 App ID 和 Secret 写回当前频道配置。",
+        "feishuAutoNotice": "系统会在扫码登录后自动创建并发布飞书机器人，把 App ID 和 Secret 写回当前频道配置，并向创建者发送一条欢迎消息。",
         "feishuCreateAndScan": "创建机器人并生成二维码",
         "qqbotSetupMode": "接入方式",
         "qqbotAutoMode": "扫码自动创建",
         "qqbotManualMode": "手动填写 App ID",
         "qqbotAutoHint": "扫码确认登录后，系统会自动创建 QQ 机器人并把 App ID / Client Secret 写回当前频道配置。",
         "qqbotManualHint": "如果您已经在 QQ 机器人开放平台创建好机器人，可以直接手动填写 App ID 和 Client Secret。",
-        "qqbotAutoNotice": "QQ 机器人不需要额外开权限。扫码成功后系统会自动创建机器人并保存凭证。",
+        "qqbotAutoNotice": "QQ 机器人不需要额外开权限。扫码成功后系统会自动创建机器人、保存凭证，并向创建者发送一条欢迎消息。",
         "qqbotCreateAndScan": "创建 QQ 机器人并生成二维码"
     },
     "meta": {

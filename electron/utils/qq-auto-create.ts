@@ -7,12 +7,15 @@ import { dirname, join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import type { Cookie, Session } from 'electron';
 import { getOpenClawResolvedDir } from './paths';
+import { logger } from './logger';
 import { buildElectronProxyConfig } from './proxy';
 import { proxyAwareFetch } from './proxy-fetch';
 import { getAllSettings } from './store';
 
 const QQ_BASE_URL = 'https://q.qq.com';
 const QQ_BOT_BASE_URL = 'https://bot.q.qq.com';
+const QQ_API_BASE_URL = 'https://api.sgroup.qq.com';
+const QQ_APP_ACCESS_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQ_LOGIN_URL = `${QQ_BASE_URL}/qqbot/openclaw/login.html`;
 const QQ_INDEX_URL = `${QQ_BASE_URL}/qqbot/openclaw/index.html`;
 const QQ_ENTITY_PICKER_URL = `${QQ_BASE_URL}/qqbot/openclaw/entity-picker.html`;
@@ -32,7 +35,10 @@ const FIRST_QR_TIMEOUT_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 8 * 60_000;
 const SESSION_TIMEOUT_MS = 10 * 60_000;
 const QQ_POLL_INTERVAL_MS = 2_000;
+const WELCOME_MESSAGE_TIMEOUT_MS = 10_000;
+const WELCOME_MESSAGE_RETRY_COUNT = 3;
 const DEFAULT_APP_DESCRIPTION = 'Created by TnymaAI';
+const DEFAULT_WELCOME_MESSAGE = '欢迎使用 TnymaAI！你的机器人已经创建完成，现在可以开始使用了。';
 const QQ_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 const SESSION_EVENT_QR = 'qr';
@@ -90,6 +96,13 @@ type QQBotApiEnvelope<T> = {
 type QQBotLoginPollPayload = {
   code?: number;
   developer_id?: string;
+  message?: string;
+};
+
+type QQBotAccessTokenResponse = {
+  access_token?: string;
+  code?: number;
+  expires_in?: number;
   message?: string;
 };
 
@@ -160,6 +173,14 @@ function normalizeBotName(value: string | null | undefined): string {
 function normalizeBotDescription(value: string | null | undefined): string {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_APP_DESCRIPTION;
+}
+
+function buildAutoCreateWelcomeMessage(botName: string): string {
+  const trimmed = botName.trim();
+  if (trimmed.length > 0) {
+    return `欢迎使用 ${trimmed}！我是由 TnymaAI 创建的机器人，现在已经准备就绪。`;
+  }
+  return DEFAULT_WELCOME_MESSAGE;
 }
 
 function getQrRenderDeps(): QrRenderDeps {
@@ -367,6 +388,26 @@ async function fetchWithSession(
   });
 }
 
+async function proxyAwareFetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<globalThis.Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await proxyAwareFetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function postQqJson<T>(
   ctx: QQBotRequestContext,
   url: string,
@@ -497,6 +538,100 @@ async function modifyQqBotProfile(
   if (response.retcode !== 0) {
     throw new Error(response.msg || 'Failed to update the QQ bot profile.');
   }
+}
+
+async function fetchQqAppAccessToken(appId: string, clientSecret: string): Promise<string> {
+  const response = await proxyAwareFetchWithTimeout(
+    QQ_APP_ACCESS_TOKEN_URL,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': QQ_USER_AGENT,
+      },
+      body: JSON.stringify({
+        appId,
+        clientSecret,
+      }),
+    },
+    WELCOME_MESSAGE_TIMEOUT_MS,
+  );
+
+  const raw = await response.text();
+  let payload: QQBotAccessTokenResponse;
+  try {
+    payload = JSON.parse(raw) as QQBotAccessTokenResponse;
+  } catch (error) {
+    throw new Error(`Failed to parse QQ bot access token response: ${String(error)}`, { cause: error });
+  }
+
+  if (!response.ok || !payload.access_token?.trim()) {
+    throw new Error(
+      `Failed to get QQ bot access token: HTTP ${response.status} code=${String(payload.code ?? 'unknown')} msg=${payload.message || raw.slice(0, 200)}`,
+    );
+  }
+
+  return payload.access_token.trim();
+}
+
+async function sendQqWelcomeMessage(
+  appId: string,
+  clientSecret: string,
+  developerId: string,
+  content: string,
+): Promise<void> {
+  const accessToken = await fetchQqAppAccessToken(appId, clientSecret);
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= WELCOME_MESSAGE_RETRY_COUNT; attempt += 1) {
+    try {
+      const response = await proxyAwareFetchWithTimeout(
+        `${QQ_API_BASE_URL}/v2/users/${encodeURIComponent(developerId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `QQBot ${accessToken}`,
+            'Content-Type': 'application/json',
+            'User-Agent': QQ_USER_AGENT,
+          },
+          body: JSON.stringify({
+            content,
+            msg_type: 0,
+          }),
+        },
+        WELCOME_MESSAGE_TIMEOUT_MS,
+      );
+
+      const raw = await response.text();
+      let payload: Record<string, unknown> = {};
+      if (raw.trim()) {
+        try {
+          payload = JSON.parse(raw) as Record<string, unknown>;
+        } catch (error) {
+          throw new Error(`Failed to parse QQ proactive welcome response: ${String(error)}`, { cause: error });
+        }
+      }
+
+      if (!response.ok) {
+        const message = typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message
+          : raw.slice(0, 200);
+        throw new Error(`QQ welcome message request failed: HTTP ${response.status} ${message}`);
+      }
+
+      logger.info(`QQ auto-create sent welcome message: appId=${appId} developerId=${developerId}`);
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < WELCOME_MESSAGE_RETRY_COUNT) {
+        await delay(1_500);
+      }
+    }
+  }
+
+  throw lastError ?? new Error('Failed to send QQ welcome message.');
 }
 
 function computeBkn(skey: string | null | undefined): string {
@@ -808,6 +943,9 @@ class QQBotAutoCreateSession extends EventEmitter {
     const avatar = await uploadDefaultAvatar(requestContext);
     await modifyQqBotProfile(requestContext, appId, name, desc, avatar).catch(() => {});
     this.publishProgress('updating_profile', 'completed');
+    await sendQqWelcomeMessage(appId, clientSecret, developerId, buildAutoCreateWelcomeMessage(name)).catch((error) => {
+      logger.warn(`QQ auto-create welcome message failed: ${String(error)}`);
+    });
 
     this.complete({
       appId,

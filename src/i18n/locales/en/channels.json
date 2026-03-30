@@ -102,14 +102,14 @@
         "feishuManualMode": "Manual App ID",
         "feishuAutoHint": "After you confirm the QR login, TnymaAI will create the bot, grant permissions, subscribe events, and publish it automatically.",
         "feishuManualHint": "If you already created the Feishu app yourself, enter the App ID and Secret directly.",
-        "feishuAutoNotice": "After QR login, TnymaAI will create and publish the Feishu bot automatically, then write the App ID and Secret back into this channel config.",
+        "feishuAutoNotice": "After QR login, TnymaAI will create and publish the Feishu bot automatically, write the App ID and Secret back into this channel config, and send a welcome message to the creator.",
         "feishuCreateAndScan": "Create Bot & Generate QR",
         "qqbotSetupMode": "Setup Mode",
         "qqbotAutoMode": "Auto Create via QR",
         "qqbotManualMode": "Manual App ID",
         "qqbotAutoHint": "After you confirm the QQ QR login, TnymaAI will create the bot automatically and write the App ID / Client Secret back into this channel config.",
         "qqbotManualHint": "If you already created the QQ bot yourself, enter the App ID and Client Secret directly.",
-        "qqbotAutoNotice": "QQ bot creation does not require extra permission setup. After login, TnymaAI will create the bot and save the credentials automatically.",
+        "qqbotAutoNotice": "QQ bot creation does not require extra permission setup. After login, TnymaAI will create the bot, save the credentials automatically, and send a welcome message to the creator.",
         "qqbotCreateAndScan": "Create QQ Bot & Generate QR"
     },
     "meta": {

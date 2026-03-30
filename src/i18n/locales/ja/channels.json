@@ -102,14 +102,14 @@
         "feishuManualMode": "App ID を手動入力",
         "feishuAutoHint": "QR ログインを確認すると、TnymaAI がボット作成、権限付与、イベント購読、公開まで自動で進めます。",
         "feishuManualHint": "すでに Feishu Open Platform でアプリを作成済みなら、App ID と Secret を直接入力できます。",
-        "feishuAutoNotice": "QR ログイン後、TnymaAI が Feishu ボットを自動で作成・公開し、App ID と Secret をこのチャンネル設定へ書き戻します。",
+        "feishuAutoNotice": "QR ログイン後、TnymaAI が Feishu ボットを自動で作成・公開し、App ID と Secret をこのチャンネル設定へ書き戻したうえで、作成者へ歓迎メッセージを送信します。",
         "feishuCreateAndScan": "ボットを作成して QR を生成",
         "qqbotSetupMode": "接続方法",
         "qqbotAutoMode": "QRで自動作成",
         "qqbotManualMode": "App ID を手動入力",
         "qqbotAutoHint": "QQ の QR ログインを確認すると、TnymaAI がボットを自動作成し、App ID / Client Secret をこのチャンネル設定へ書き戻します。",
         "qqbotManualHint": "すでに QQ ボットを作成済みなら、App ID と Client Secret を直接入力できます。",
-        "qqbotAutoNotice": "QQ ボットは追加の権限設定が不要です。ログイン成功後、TnymaAI がボットを作成して認証情報を保存します。",
+        "qqbotAutoNotice": "QQ ボットは追加の権限設定が不要です。ログイン成功後、TnymaAI がボットを作成して認証情報を保存し、作成者へ歓迎メッセージを送信します。",
         "qqbotCreateAndScan": "QQ ボットを作成して QR を生成"
     },
     "meta": {
