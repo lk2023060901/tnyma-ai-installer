@@ -1,7 +1,7 @@
 ; TnymaAI Custom NSIS Installer/Uninstaller Script
 ;
 ; Install: enables long paths, adds resources\cli to user PATH for openclaw CLI.
-; Uninstall: removes the PATH entry and optionally deletes user data.
+; Uninstall: removes PATH/login-startup leftovers and optionally deletes user data.
 
 !ifndef nsProcess::FindProcess
   !include "nsProcess.nsh"
@@ -109,9 +109,24 @@
 
   _cu_pathDone:
 
+  ; Remove Windows login-startup entries created through Electron login items
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TnymaAI"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "tnyma-ai"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "app.tnyma-ai.desktop"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "TnymaAI"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "tnyma-ai"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "app.tnyma-ai.desktop"
+
+  ; Remove shortcut leftovers that may outlive the main uninstall flow
+  Delete "$DESKTOP\TnymaAI.lnk"
+  Delete "$SMPROGRAMS\TnymaAI.lnk"
+  Delete "$SMPROGRAMS\Uninstall TnymaAI.lnk"
+  Delete "$SMSTARTUP\TnymaAI.lnk"
+  RMDir /r "$SMPROGRAMS\TnymaAI"
+
   ; Ask user if they want to completely remove all user data
   MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Do you want to completely remove all TnymaAI user data?$\r$\n$\r$\nThis will delete:$\r$\n  • .openclaw folder (configuration & skills)$\r$\n  • AppData\Local\tnyma-ai (local app data)$\r$\n  • AppData\Roaming\tnyma-ai (roaming app data)$\r$\n$\r$\nSelect 'No' to keep your data for future reinstallation." \
+    "Do you want to completely remove all TnymaAI user data?$\r$\n$\r$\nThis will delete:$\r$\n  • .openclaw folder (configuration & skills)$\r$\n  • .tnyma-ai folder (launcher state)$\r$\n  • AppData\Local\tnyma-ai and AppData\Local\OpenClaw$\r$\n  • AppData\Roaming\tnyma-ai and AppData\Roaming\OpenClaw$\r$\n$\r$\nSelect 'No' to keep your data for future reinstallation." \
     /SD IDNO IDYES _cu_removeData IDNO _cu_skipRemove
 
   _cu_removeData:
@@ -128,8 +143,11 @@
 
     ; --- Always remove current user's data first ---
     RMDir /r "$PROFILE\.openclaw"
+    RMDir /r "$PROFILE\.tnyma-ai"
     RMDir /r "$LOCALAPPDATA\tnyma-ai"
+    RMDir /r "$LOCALAPPDATA\OpenClaw"
     RMDir /r "$APPDATA\tnyma-ai"
+    RMDir /r "$APPDATA\OpenClaw"
 
     ; --- Retry: if directories still exist (locked files), wait and try again ---
     ; Check .openclaw
@@ -142,6 +160,16 @@
         Pop $1
     _cu_openclawDone:
 
+    ; Check .tnyma-ai
+    IfFileExists "$PROFILE\.tnyma-ai\*.*" 0 _cu_tnymaHiddenDone
+      Sleep 3000
+      RMDir /r "$PROFILE\.tnyma-ai"
+      IfFileExists "$PROFILE\.tnyma-ai\*.*" 0 _cu_tnymaHiddenDone
+        nsExec::ExecToStack 'cmd.exe /c rd /s /q "$PROFILE\.tnyma-ai"'
+        Pop $0
+        Pop $1
+    _cu_tnymaHiddenDone:
+
     ; Check AppData\Local\tnyma-ai
     IfFileExists "$LOCALAPPDATA\tnyma-ai\*.*" 0 _cu_localDone
       Sleep 3000
@@ -151,6 +179,16 @@
         Pop $0
         Pop $1
     _cu_localDone:
+
+    ; Check AppData\Local\OpenClaw
+    IfFileExists "$LOCALAPPDATA\OpenClaw\*.*" 0 _cu_localOpenClawDone
+      Sleep 3000
+      RMDir /r "$LOCALAPPDATA\OpenClaw"
+      IfFileExists "$LOCALAPPDATA\OpenClaw\*.*" 0 _cu_localOpenClawDone
+        nsExec::ExecToStack 'cmd.exe /c rd /s /q "$LOCALAPPDATA\OpenClaw"'
+        Pop $0
+        Pop $1
+    _cu_localOpenClawDone:
 
     ; Check AppData\Roaming\tnyma-ai
     IfFileExists "$APPDATA\tnyma-ai\*.*" 0 _cu_roamingDone
@@ -162,14 +200,30 @@
         Pop $1
     _cu_roamingDone:
 
+    ; Check AppData\Roaming\OpenClaw
+    IfFileExists "$APPDATA\OpenClaw\*.*" 0 _cu_roamingOpenClawDone
+      Sleep 3000
+      RMDir /r "$APPDATA\OpenClaw"
+      IfFileExists "$APPDATA\OpenClaw\*.*" 0 _cu_roamingOpenClawDone
+        nsExec::ExecToStack 'cmd.exe /c rd /s /q "$APPDATA\OpenClaw"'
+        Pop $0
+        Pop $1
+    _cu_roamingOpenClawDone:
+
     ; --- Final check: warn user if any directories could not be removed ---
     StrCpy $R3 ""
     IfFileExists "$PROFILE\.openclaw\*.*" 0 +2
       StrCpy $R3 "$R3$\r$\n  • $PROFILE\.openclaw"
+    IfFileExists "$PROFILE\.tnyma-ai\*.*" 0 +2
+      StrCpy $R3 "$R3$\r$\n  • $PROFILE\.tnyma-ai"
     IfFileExists "$LOCALAPPDATA\tnyma-ai\*.*" 0 +2
       StrCpy $R3 "$R3$\r$\n  • $LOCALAPPDATA\tnyma-ai"
+    IfFileExists "$LOCALAPPDATA\OpenClaw\*.*" 0 +2
+      StrCpy $R3 "$R3$\r$\n  • $LOCALAPPDATA\OpenClaw"
     IfFileExists "$APPDATA\tnyma-ai\*.*" 0 +2
       StrCpy $R3 "$R3$\r$\n  • $APPDATA\tnyma-ai"
+    IfFileExists "$APPDATA\OpenClaw\*.*" 0 +2
+      StrCpy $R3 "$R3$\r$\n  • $APPDATA\OpenClaw"
     StrCmp $R3 "" _cu_cleanupOk
       MessageBox MB_OK|MB_ICONEXCLAMATION \
         "Some data directories could not be removed (files may be in use):$\r$\n$R3$\r$\n$\r$\nPlease delete them manually after restarting your computer."
@@ -189,8 +243,11 @@
     StrCmp $R2 $PROFILE _cu_enumNext
 
     RMDir /r "$R2\.openclaw"
+    RMDir /r "$R2\.tnyma-ai"
     RMDir /r "$R2\AppData\Local\tnyma-ai"
+    RMDir /r "$R2\AppData\Local\OpenClaw"
     RMDir /r "$R2\AppData\Roaming\tnyma-ai"
+    RMDir /r "$R2\AppData\Roaming\OpenClaw"
 
   _cu_enumNext:
     IntOp $R0 $R0 + 1
@@ -199,4 +256,3 @@
   _cu_enumDone:
   _cu_skipRemove:
 !macroend
-
