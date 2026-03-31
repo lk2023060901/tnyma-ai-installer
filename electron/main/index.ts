@@ -9,6 +9,7 @@ import { GatewayManager } from '../gateway/manager';
 import { registerIpcHandlers } from './ipc-handlers';
 import { createTray } from './tray';
 import { createMenu } from './menu';
+import { createPetWindow } from './pet-window';
 
 import { appUpdater, registerUpdateHandlers } from './updater';
 import { initLogger, logger } from '../utils/logger';
@@ -251,6 +252,16 @@ function createMainWindow(): BrowserWindow {
   return win;
 }
 
+async function maybeCreatePetWindow(): Promise<void> {
+  const setupComplete = await getSetting('setupComplete');
+  if (!setupComplete) {
+    logger.info('Skipping desktop pet until setup is complete');
+    return;
+  }
+
+  await createPetWindow();
+}
+
 /**
  * Initialize the application
  */
@@ -280,6 +291,11 @@ async function initialize(): Promise<void> {
 
   // Create system tray
   createTray(window);
+
+  // Only show the desktop pet after setup has been completed.
+  void maybeCreatePetWindow().catch((error) => {
+    logger.warn('Failed to create pet window:', error);
+  });
 
   // Override security headers ONLY for the OpenClaw Gateway Control UI.
   // The URL filter ensures this callback only fires for gateway requests,
@@ -506,7 +522,7 @@ if (gotTheLock) {
     // Register activate handler AFTER app is ready to prevent
     // "Cannot create BrowserWindow before app is ready" on macOS.
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
         createMainWindow();
       } else {
         focusMainWindow();

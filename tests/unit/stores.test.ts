@@ -20,6 +20,7 @@ describe('Settings Store', () => {
       startMinimized: false,
       launchAtStartup: false,
       updateChannel: 'stable',
+      setupComplete: false,
     });
   });
   
@@ -85,6 +86,53 @@ describe('Settings Store', () => {
       'hostapi:fetch',
       expect.objectContaining({
         path: '/api/settings/launchAtStartup',
+        method: 'PUT',
+      }),
+    );
+  });
+
+  it('should hydrate setup completion from the main-process settings store', async () => {
+    const invoke = vi.mocked(window.electron.ipcRenderer.invoke);
+    useSettingsStore.setState({ setupComplete: true });
+    invoke.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        status: 200,
+        ok: true,
+        json: { setupComplete: false, language: 'en' },
+      },
+    });
+
+    await useSettingsStore.getState().init();
+
+    expect(useSettingsStore.getState().setupComplete).toBe(false);
+    expect(invoke).toHaveBeenCalledWith(
+      'hostapi:fetch',
+      expect.objectContaining({
+        path: '/api/settings',
+        method: 'GET',
+      }),
+    );
+  });
+
+  it('should persist setup completion through host api', async () => {
+    const invoke = vi.mocked(window.electron.ipcRenderer.invoke);
+    invoke.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        status: 200,
+        ok: true,
+        json: { success: true },
+      },
+    });
+
+    await useSettingsStore.getState().markSetupComplete();
+
+    expect(useSettingsStore.getState().setupComplete).toBe(true);
+    expect(invoke).toHaveBeenCalledWith(
+      'hostapi:fetch',
+      expect.objectContaining({
+        path: '/api/settings/setupComplete',
         method: 'PUT',
       }),
     );

@@ -60,6 +60,7 @@ import {
 } from '../services/providers/provider-runtime-sync';
 import { validateApiKeyWithProvider } from '../services/providers/provider-validation';
 import { appUpdater } from './updater';
+import { createPetWindow } from './pet-window';
 import { registerHostApiProxyHandlers } from './ipc/host-api-proxy';
 import {
   isLaunchAtStartupKey,
@@ -2018,6 +2019,11 @@ function registerAppHandlers(): void {
   ipcMain.handle('app:relaunch', () => {
     app.relaunch();
     app.quit();
+  });
+
+  ipcMain.handle('pet:show', async () => {
+    await createPetWindow();
+    return { success: true };
   });
 }
 

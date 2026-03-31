@@ -336,6 +336,7 @@ export function Setup() {
       await ensureGatewayRunning();
       const controlUiUrl = await waitForControlUiUrl();
       await invokeIpc('shell:openExternal', controlUiUrl);
+      await invokeIpc('pet:show');
       await invokeIpc('window:close');
     } finally {
       setOpeningControlUi(false);
@@ -344,8 +345,8 @@ export function Setup() {
 
   const handleNext = async () => {
     if (isLastStep) {
-      markSetupComplete();
       try {
+        await markSetupComplete();
         await openControlUi();
         toast.success(t('complete.title'));
       } catch (error) {
@@ -393,9 +394,15 @@ export function Setup() {
     setCurrentStep((i) => Math.max(i - 1, 0));
   };
 
-  const handleSkip = () => {
-    markSetupComplete();
-    setCurrentStep(STEP.COMPLETE);
+  const handleSkip = async () => {
+    try {
+      await markSetupComplete();
+      setCurrentStep(STEP.COMPLETE);
+    } catch (error) {
+      toast.error(String(error));
+      return;
+    }
+
     void persistBackgroundGatewayStartupSettings().catch((error) => {
       toast.error(String(error));
     });

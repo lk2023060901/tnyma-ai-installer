@@ -61,7 +61,7 @@ interface SettingsState {
   setAutoDownloadUpdate: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setDevModeUnlocked: (value: boolean) => void;
-  markSetupComplete: () => void;
+  markSetupComplete: () => Promise<void>;
   resetSettings: () => void;
 }
 
@@ -174,7 +174,13 @@ export const useSettingsStore = create<SettingsState>()(
           body: JSON.stringify({ value: devModeUnlocked }),
         }).catch(() => { });
       },
-      markSetupComplete: () => set({ setupComplete: true }),
+      markSetupComplete: async () => {
+        set({ setupComplete: true });
+        await hostApiFetch('/api/settings/setupComplete', {
+          method: 'PUT',
+          body: JSON.stringify({ value: true }),
+        });
+      },
       resetSettings: () => set(defaultSettings),
     }),
     {

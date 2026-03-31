@@ -97,6 +97,9 @@ We are committed to maintaining strict alignment with the upstream OpenClaw proj
 ### 🎯 Zero Configuration Barrier
 Complete the entire setup—from installation to your first AI interaction—through an intuitive graphical interface. No terminal commands, no YAML files, no environment variable hunting.
 
+### 🐾 Draggable Desktop Pet
+After you finish the setup wizard and open Control UI, TnymaAI shows a lightweight always-on-top desktop pet overlay built from bundled pixel sprites. You can drag it freely around the desktop, and the pet window is constrained to stay inside the visible screen area.
+
 ### 💬 Intelligent Chat Interface
 Communicate with AI agents through a modern chat experience. Support for multiple conversation contexts, message history, rich content rendering with Markdown, and direct `@agent` routing in the main composer for multi-agent setups.
 When you target another agent with `@agent`, TnymaAI switches into that agent's own conversation context directly instead of relaying through the default agent. Agent workspaces stay separate by default, and stronger isolation depends on OpenClaw sandbox settings.
