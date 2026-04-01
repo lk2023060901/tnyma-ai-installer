@@ -65,6 +65,123 @@ run_step() {
   return $status
 }
 
+load_signing_env_file() {
+  env_file="$1"
+
+  if [ -z "${env_file}" ] || [ ! -f "${env_file}" ]; then
+    return 1
+  fi
+
+  echo "==> Loading signing environment from ${env_file}"
+  set -a
+  # shellcheck disable=SC1090
+  . "${env_file}"
+  set +a
+  return 0
+}
+
+load_signing_env() {
+  if [ -n "${CSC_NAME:-}" ] && [ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]; then
+    return 0
+  fi
+
+  if [ -n "${TNYMAAI_MAC_SIGNING_ENV:-}" ] && load_signing_env_file "${TNYMAAI_MAC_SIGNING_ENV}"; then
+    return 0
+  fi
+
+  if load_signing_env_file "${HOME}/.tnymaai-mac-signing.env"; then
+    return 0
+  fi
+
+  # Backward-compatible fallback for the current workstation setup.
+  load_signing_env_file "/Volumes/work/tnymaai-signing/tnymaai-mac-signing.env" || true
+}
+
+require_env() {
+  var_name="$1"
+  eval "var_value=\${$var_name:-}"
+  if [ -z "${var_value}" ]; then
+    echo "Missing required environment variable: ${var_name}" >&2
+    exit 1
+  fi
+}
+
+require_signing_env() {
+  require_env CSC_NAME
+  require_env APPLE_KEYCHAIN_PROFILE
+
+  if [ -z "${APPLE_KEYCHAIN:-}" ]; then
+    APPLE_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
+    export APPLE_KEYCHAIN
+  fi
+}
+
+resolve_dmg_codesign_identity() {
+  case "${CSC_NAME}" in
+    Developer\ ID\ Application:*)
+      printf '%s\n' "${CSC_NAME}"
+      ;;
+    *)
+      printf 'Developer ID Application: %s\n' "${CSC_NAME}"
+      ;;
+  esac
+}
+
+validate_app_bundle() {
+  label="$1"
+  app_path="$2"
+
+  if [ ! -d "${app_path}" ]; then
+    echo "Missing app bundle: ${app_path}" >&2
+    exit 1
+  fi
+
+  run_step "Validating ${label} bundle signature" \
+    codesign --verify --deep --strict --verbose=4 "${app_path}"
+  run_step "Validating ${label} bundle Gatekeeper acceptance" \
+    spctl -a -vvv -t exec "${app_path}"
+  run_step "Validating ${label} bundle stapled ticket" \
+    xcrun stapler validate "${app_path}"
+}
+
+validate_zip_artifact() {
+  label="$1"
+  zip_path="$2"
+  temp_dir="$3"
+  extract_dir="${temp_dir}/$(basename "${zip_path}" .zip)"
+  app_path="${extract_dir}/TnymaAI.app"
+
+  mkdir -p "${extract_dir}"
+  run_step "Extracting ${label} zip for validation" \
+    ditto -x -k "${zip_path}" "${extract_dir}"
+  validate_app_bundle "${label} zip app" "${app_path}"
+}
+
+sign_and_notarize_dmg() {
+  label="$1"
+  dmg_path="$2"
+  dmg_codesign_identity="$3"
+
+  if [ ! -f "${dmg_path}" ]; then
+    echo "Missing dmg artifact: ${dmg_path}" >&2
+    exit 1
+  fi
+
+  run_step "Signing ${label} dmg container" \
+    codesign --force --sign "${dmg_codesign_identity}" "${dmg_path}"
+  run_step "Submitting ${label} dmg for notarization" \
+    xcrun notarytool submit "${dmg_path}" \
+      --keychain-profile "${APPLE_KEYCHAIN_PROFILE}" \
+      --keychain "${APPLE_KEYCHAIN}" \
+      --wait
+  run_step "Stapling ${label} dmg ticket" \
+    xcrun stapler staple "${dmg_path}"
+  run_step "Validating ${label} dmg stapled ticket" \
+    xcrun stapler validate "${dmg_path}"
+  run_step "Validating ${label} dmg Gatekeeper acceptance" \
+    spctl -a -vvv --type open --context context:primary-signature "${dmg_path}"
+}
+
 ensure_pnpm
 
 if [ ! -f package.json ] || [ ! -f pnpm-lock.yaml ]; then
@@ -84,7 +201,20 @@ else
   echo "==> macOS uv binaries already present"
 fi
 
+load_signing_env
+require_signing_env
+
 VERSION="$(node -p "require('./package.json').version")"
+DMG_CODESIGN_IDENTITY="$(resolve_dmg_codesign_identity)"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tnymaai-mac-package.XXXXXX")"
+
+cleanup() {
+  if [ -n "${TEMP_ROOT:-}" ] && [ -d "${TEMP_ROOT}" ]; then
+    rm -rf "${TEMP_ROOT}"
+  fi
+}
+
+trap cleanup EXIT INT TERM
 
 echo "==> Stopping stale packaging processes"
 pkill -f 'electron-builder|app-builder|pnpm.*package' >/dev/null 2>&1 || true
@@ -122,6 +252,15 @@ do
     exit 1
   fi
 done
+
+validate_app_bundle "macOS x64 app" "release/mac/TnymaAI.app"
+validate_app_bundle "macOS arm64 app" "release/mac-arm64/TnymaAI.app"
+
+validate_zip_artifact "macOS x64" "release/TnymaAI-${VERSION}-mac-x64.zip" "${TEMP_ROOT}"
+validate_zip_artifact "macOS arm64" "release/TnymaAI-${VERSION}-mac-arm64.zip" "${TEMP_ROOT}"
+
+sign_and_notarize_dmg "macOS x64" "release/TnymaAI-${VERSION}-mac-x64.dmg" "${DMG_CODESIGN_IDENTITY}"
+sign_and_notarize_dmg "macOS arm64" "release/TnymaAI-${VERSION}-mac-arm64.dmg" "${DMG_CODESIGN_IDENTITY}"
 
 echo "==> Done"
 find release -maxdepth 1 -type f | sort
