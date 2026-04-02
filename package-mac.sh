@@ -38,27 +38,85 @@ has_local_proxy() {
   esac
 }
 
+timestamp() {
+  date '+%H:%M:%S'
+}
+
+format_command() {
+  printf '%s' "$1"
+  shift
+  for arg in "$@"; do
+    printf ' %s' "$arg"
+  done
+  printf '\n'
+}
+
+run_with_progress() {
+  step_name="$1"
+  shift
+
+  step_started_at="$(date +%s)"
+  echo "==> [$(timestamp)] ${step_name}"
+  echo "    command: $(format_command "$@")"
+
+  "$@" &
+  step_pid=$!
+  heartbeat_pid=""
+
+  (
+    elapsed=0
+    while kill -0 "${step_pid}" >/dev/null 2>&1; do
+      sleep 30
+      elapsed=$((elapsed + 30))
+      if kill -0 "${step_pid}" >/dev/null 2>&1; then
+        echo "    [$(timestamp)] still running (${elapsed}s): ${step_name}"
+      fi
+    done
+  ) &
+  heartbeat_pid=$!
+
+  wait "${step_pid}"
+  status=$?
+
+  if [ -n "${heartbeat_pid}" ]; then
+    kill "${heartbeat_pid}" >/dev/null 2>&1 || true
+    wait "${heartbeat_pid}" 2>/dev/null || true
+  fi
+
+  step_finished_at="$(date +%s)"
+  step_duration=$((step_finished_at - step_started_at))
+
+  if [ "${status}" -eq 0 ]; then
+    echo "==> [$(timestamp)] Completed ${step_name} (${step_duration}s)"
+  else
+    echo "==> [$(timestamp)] Failed ${step_name} (${step_duration}s) with exit code ${status}" >&2
+  fi
+
+  return "${status}"
+}
+
 run_step() {
   step_name="$1"
   shift
 
-  echo "==> ${step_name}"
-  if "$@"; then
+  if run_with_progress "${step_name}" "$@"; then
     return 0
   else
     status=$?
   fi
 
   if has_local_proxy; then
-    echo "==> ${step_name} failed. Retrying once without proxy variables"
-    env \
+    echo "==> [$(timestamp)] ${step_name} failed. Retrying once without proxy variables"
+    if run_with_progress "${step_name} (retry without proxy)" env \
       -u HTTP_PROXY \
       -u HTTPS_PROXY \
       -u ALL_PROXY \
       -u http_proxy \
       -u https_proxy \
       -u all_proxy \
-      "$@"
+      "$@"; then
+      return 0
+    fi
     return $?
   fi
 
@@ -216,11 +274,14 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-echo "==> Stopping stale packaging processes"
+echo "==> [$(timestamp)] Starting macOS packaging workflow"
+echo "==> [$(timestamp)] Version: ${VERSION}"
+echo "==> [$(timestamp)] Using dmg signing identity: ${DMG_CODESIGN_IDENTITY}"
+echo "==> [$(timestamp)] Stopping stale packaging processes"
 pkill -f 'electron-builder|app-builder|pnpm.*package' >/dev/null 2>&1 || true
 sleep 1
 
-echo "==> Cleaning previous macOS packaging outputs"
+echo "==> [$(timestamp)] Cleaning previous macOS packaging outputs"
 rm -rf release/mac release/mac-arm64
 rm -f \
   "release/TnymaAI-${VERSION}-mac-x64.dmg" \
@@ -236,8 +297,10 @@ rm -rf release/github
 
 run_step "Rebuilding app bundles" pnpm run package
 
+echo "==> [$(timestamp)] Building x64 artifacts via electron-builder"
 run_step "Building macOS DMG (x64)" pnpm exec electron-builder --mac dmg --x64 --publish never
 run_step "Building macOS ZIP (x64)" pnpm exec electron-builder --mac zip --x64 --publish never
+echo "==> [$(timestamp)] Building arm64 artifacts via electron-builder"
 run_step "Building macOS DMG (arm64)" pnpm exec electron-builder --mac dmg --arm64 --publish never
 run_step "Building macOS ZIP (arm64)" pnpm exec electron-builder --mac zip --arm64 --publish never
 
@@ -259,8 +322,9 @@ validate_app_bundle "macOS arm64 app" "release/mac-arm64/TnymaAI.app"
 validate_zip_artifact "macOS x64" "release/TnymaAI-${VERSION}-mac-x64.zip" "${TEMP_ROOT}"
 validate_zip_artifact "macOS arm64" "release/TnymaAI-${VERSION}-mac-arm64.zip" "${TEMP_ROOT}"
 
+echo "==> [$(timestamp)] Signing and notarizing dmg containers"
 sign_and_notarize_dmg "macOS x64" "release/TnymaAI-${VERSION}-mac-x64.dmg" "${DMG_CODESIGN_IDENTITY}"
 sign_and_notarize_dmg "macOS arm64" "release/TnymaAI-${VERSION}-mac-arm64.dmg" "${DMG_CODESIGN_IDENTITY}"
 
-echo "==> Done"
+echo "==> [$(timestamp)] Done"
 find release -maxdepth 1 -type f | sort
