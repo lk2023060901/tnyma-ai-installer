@@ -105,7 +105,7 @@ When you target another agent with `@agent`, TnymaAI switches into that agent's 
 Configure and monitor multiple AI channels simultaneously. Each channel operates independently, allowing you to run specialized agents for different tasks.
 The Feishu channel now supports both manual App ID / App Secret entry and a QR-based auto-create flow that signs in, creates the bot, grants permissions, subscribes events, publishes it from the Channels page, and sends a welcome message to the creator. QQ Bot now also supports both manual App ID / Client Secret entry and a QR-based one-click bot creation flow from the same Channels UI, including an automatic welcome message after creation succeeds.
 Each channel now supports multiple accounts, per-account agent binding, and switching the channel default account directly from the Channels page.
-TnymaAI now also bundles Tencent's official personal WeChat channel plugin, so you can link WeChat directly from the Channels page with an in-app QR flow.
+TnymaAI now also bundles Tencent's official personal WeChat channel plugin, so you can link WeChat directly from the Channels page with an in-app QR flow and start the same QR-based setup from the onboarding wizard.
 
 ### ⏰ Cron-Based Automation
 Schedule AI tasks to run automatically. Define triggers, set intervals, and let your AI agents work around the clock without manual intervention.
@@ -171,7 +171,7 @@ When you launch TnymaAI for the first time, the **Setup Wizard** will guide you 
 2. **Environment Check** – Verify the bundled OpenClaw runtime and start the Gateway
 3. **AI Provider** – Choose from OpenClaw's upstream provider auth choices and complete API key or OAuth verification
 4. **Model Selection** – Sync the provider catalog and save the default model, with the first discovered model preselected
-5. **Feishu / QQ Bots** – Optionally configure Feishu or QQ right after model setup, including the QR-based one-click flows
+5. **WeChat / Feishu / QQ Bots** – Optionally configure WeChat, Feishu, or QQ right after model setup, including the QR-based one-click flows
 6. **Component Installation** – Install the default local skills and finish the desktop onboarding
 
 The wizard preselects your system language when it is supported, and falls back to English otherwise.

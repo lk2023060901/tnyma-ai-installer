@@ -104,6 +104,7 @@
         "feishuManualHint": "すでに Feishu Open Platform でアプリを作成済みなら、App ID と Secret を直接入力できます。",
         "feishuAutoNotice": "QR ログイン後、TnymaAI が Feishu ボットを自動で作成・公開し、App ID と Secret をこのチャンネル設定へ書き戻したうえで、作成者へ歓迎メッセージを送信します。",
         "feishuCreateAndScan": "ボットを作成して QR を生成",
+        "wechatAutoHint": "QR ログインを確認すると、TnymaAI が公式 WeChat プラグインを自動でインストール・有効化し、新しく接続した WeChat ボットを現在の実行環境へ保存します。",
         "qqbotSetupMode": "接続方法",
         "qqbotAutoMode": "QRで自動作成",
         "qqbotManualMode": "App ID を手動入力",

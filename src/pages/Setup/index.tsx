@@ -144,6 +144,7 @@ import {
 } from '@/lib/provider-auth-choices';
 import { CHANNEL_META, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import appIcon from '@/assets/logo.svg';
+import wechatIcon from '@/assets/channels/wechat.svg';
 import feishuIcon from '@/assets/channels/feishu.svg';
 import qqIcon from '@/assets/channels/qq.svg';
 
@@ -151,7 +152,7 @@ import qqIcon from '@/assets/channels/qq.svg';
 const providers = SETUP_PROVIDERS;
 const CONTROL_UI_POLL_RETRIES = 5;
 const CONTROL_UI_POLL_INTERVAL_MS = 1000;
-type SetupManagedChannelType = Extract<ChannelType, 'feishu' | 'qqbot'>;
+type SetupManagedChannelType = Extract<ChannelType, 'wechat' | 'feishu' | 'qqbot'>;
 type SetupChannelMode = 'auto' | 'manual';
 type AutoSetupProgressStatus = 'pending' | 'running' | 'completed' | 'error';
 type AutoSetupProgressPayload = {
@@ -164,12 +165,26 @@ type AutoSetupProgressEntry = {
   stepId: string;
 };
 
+function isSetupManagedChannelType(value: string): value is SetupManagedChannelType {
+  return value === 'wechat' || value === 'feishu' || value === 'qqbot';
+}
+
+function supportsManualSetup(channelType: SetupManagedChannelType): boolean {
+  return CHANNEL_META[channelType].configFields.length > 0;
+}
+
 const SETUP_MANAGED_CHANNELS: Array<{
   type: SetupManagedChannelType;
   iconSrc: string;
   iconClassName?: string;
   hintKey: string;
 }> = [
+  {
+    type: 'wechat',
+    iconSrc: wechatIcon,
+    iconClassName: 'dark:invert',
+    hintKey: 'channels:dialog.wechatAutoHint',
+  },
   {
     type: 'feishu',
     iconSrc: feishuIcon,
@@ -183,6 +198,7 @@ const SETUP_MANAGED_CHANNELS: Array<{
   },
 ];
 const CHANNEL_AUTO_STEP_ORDER: Record<SetupManagedChannelType, string[]> = {
+  wechat: ['waiting_for_scan'],
   feishu: ['waiting_for_scan', 'creating_bot', 'saving_credentials', 'configuring_bot', 'publishing_bot'],
   qqbot: ['waiting_for_scan', 'creating_bot', 'saving_credentials', 'updating_profile'],
 };
@@ -2267,6 +2283,9 @@ function ChannelContent({ onBusyChange, onComplete }: ChannelContentProps) {
     ? SETUP_MANAGED_CHANNELS.find((channel) => channel.type === selectedChannel) ?? null
     : null;
   const isConfigured = selectedChannel ? configuredTypes.includes(selectedChannel) : false;
+  const selectedChannelAllowsManual = selectedChannel
+    ? supportsManualSetup(selectedChannel)
+    : false;
 
   useEffect(() => {
     onBusyChange(isBusy);
@@ -2278,9 +2297,7 @@ function ChannelContent({ onBusyChange, onComplete }: ChannelContentProps) {
     try {
       const result = await hostApiFetch<{ success: boolean; channels?: string[] }>('/api/channels/configured');
       const configured = (result.channels ?? []).filter(
-        (channelType): channelType is SetupManagedChannelType => (
-          channelType === 'feishu' || channelType === 'qqbot'
-        ),
+        (channelType): channelType is SetupManagedChannelType => isSetupManagedChannelType(channelType),
       );
       setConfiguredTypes(configured);
     } catch (error) {
@@ -2430,7 +2447,7 @@ function ChannelContent({ onBusyChange, onComplete }: ChannelContentProps) {
   }, [cancelAutoDeploy, getInitialProgressEntries, t]);
 
   const handleSelectChannel = useCallback(async (value: string) => {
-    const nextChannel = (value === 'feishu' || value === 'qqbot')
+    const nextChannel = isSetupManagedChannelType(value)
       ? value
       : '';
 
@@ -2455,6 +2472,10 @@ function ChannelContent({ onBusyChange, onComplete }: ChannelContentProps) {
   }, [beginAutoDeploy, cancelAutoDeploy]);
 
   const handleSwitchMode = useCallback(async (nextMode: SetupChannelMode) => {
+    if (nextMode === 'manual' && selectedChannel && !supportsManualSetup(selectedChannel)) {
+      return;
+    }
+
     setSetupMode(nextMode);
     setAutoError(null);
     setQrCode(null);
@@ -2698,34 +2719,40 @@ function ChannelContent({ onBusyChange, onComplete }: ChannelContentProps) {
 
           <div className="space-y-3">
             <Label>{t('channel.deployMode')}</Label>
-            <div className="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-background/70 p-1">
-              <button
-                type="button"
-                onClick={() => void handleSwitchMode('auto')}
-                disabled={isBusy && setupMode === 'auto'}
-                className={cn(
-                  'rounded-xl px-4 py-2 text-sm transition-colors',
-                  setupMode === 'auto'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted'
-                )}
-              >
+            {selectedChannelAllowsManual ? (
+              <div className="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-background/70 p-1">
+                <button
+                  type="button"
+                  onClick={() => void handleSwitchMode('auto')}
+                  disabled={isBusy && setupMode === 'auto'}
+                  className={cn(
+                    'rounded-xl px-4 py-2 text-sm transition-colors',
+                    setupMode === 'auto'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted'
+                  )}
+                >
+                  {t('channel.auto.tab')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSwitchMode('manual')}
+                  disabled={isBusy && setupMode === 'auto'}
+                  className={cn(
+                    'rounded-xl px-4 py-2 text-sm transition-colors',
+                    setupMode === 'manual'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted'
+                  )}
+                >
+                  {t('channel.manual.tab')}
+                </button>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                 {t('channel.auto.tab')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSwitchMode('manual')}
-                disabled={isBusy && setupMode === 'auto'}
-                className={cn(
-                  'rounded-xl px-4 py-2 text-sm transition-colors',
-                  setupMode === 'manual'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted'
-                )}
-              >
-                {t('channel.manual.tab')}
-              </button>
-            </div>
+              </div>
+            )}
           </div>
 
           {setupMode === 'auto' ? (

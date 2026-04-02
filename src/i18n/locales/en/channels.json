@@ -104,6 +104,7 @@
         "feishuManualHint": "If you already created the Feishu app yourself, enter the App ID and Secret directly.",
         "feishuAutoNotice": "After QR login, TnymaAI will create and publish the Feishu bot automatically, write the App ID and Secret back into this channel config, and send a welcome message to the creator.",
         "feishuCreateAndScan": "Create Bot & Generate QR",
+        "wechatAutoHint": "After QR confirmation, TnymaAI installs and enables the official WeChat plugin automatically, then saves the newly linked WeChat bot into the current runtime.",
         "qqbotSetupMode": "Setup Mode",
         "qqbotAutoMode": "Auto Create via QR",
         "qqbotManualMode": "Manual App ID",

@@ -100,7 +100,7 @@
         "title": "メッセージングチャンネルを接続",
         "subtitle": "AIアシスタントを接続するプラットフォームを選択してください。チャンネルは後で設定で追加できます。",
         "selectLabel": "設定するチャンネルを選択",
-        "selectPlaceholder": "Feishu または QQ Bot を選択",
+        "selectPlaceholder": "WeChat、Feishu、または QQ Bot を選択",
         "selectHint": "まだメッセージングチャンネルが不要な場合は、そのまま次へ進み、後で設定画面から追加できます。",
         "viewDocs": "ドキュメントを表示",
         "deployMode": "デプロイ方式",

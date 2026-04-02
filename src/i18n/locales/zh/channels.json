@@ -104,6 +104,7 @@
         "feishuManualHint": "如果您已经在飞书开放平台准备好了应用凭证，可以直接手动填写。",
         "feishuAutoNotice": "系统会在扫码登录后自动创建并发布飞书机器人，把 App ID 和 Secret 写回当前频道配置，并向创建者发送一条欢迎消息。",
         "feishuCreateAndScan": "创建机器人并生成二维码",
+        "wechatAutoHint": "扫码确认后，TnymaAI 会自动安装并启用官方微信插件，并把新连接的微信机器人写入当前运行环境。",
         "qqbotSetupMode": "接入方式",
         "qqbotAutoMode": "扫码自动创建",
         "qqbotManualMode": "手动填写 App ID",

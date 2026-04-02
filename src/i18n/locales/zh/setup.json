@@ -100,7 +100,7 @@
         "title": "连接消息渠道",
         "subtitle": "选择要连接 AI 助手的平台。您可以稍后在设置中添加更多渠道。",
         "selectLabel": "选择要配置的渠道",
-        "selectPlaceholder": "请选择飞书或 QQ 机器人",
+        "selectPlaceholder": "请选择微信、飞书或 QQ 机器人",
         "selectHint": "如果暂时不需要消息渠道，可以直接点击下一步，稍后再到设置页面补充。",
         "viewDocs": "查看文档",
         "deployMode": "部署方式",
