@@ -255,4 +255,12 @@
 
   _cu_enumDone:
   _cu_skipRemove:
+    ; Best-effort cleanup for leftover install-root files. The standard NSIS
+    ; uninstall pass removes $INSTDIR, but on Windows it can leave behind the
+    ; app root or resources\openclaw if a child process is still exiting or the
+    ; uninstaller binary itself is still locked. Run an external cleanup script
+    ; from $PLUGINSDIR so it can retry after the uninstaller process exits.
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\cleanup-install-dir.ps1" "${PROJECT_DIR}\scripts\cleanup-install-dir.ps1"
+    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\cleanup-install-dir.ps1" -InstallDir "$INSTDIR" -OpenClawDir "$INSTDIR\resources\openclaw"'
 !macroend

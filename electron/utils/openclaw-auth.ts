@@ -133,6 +133,7 @@ async function discoverAgentIds(): Promise<string[]> {
 const OPENCLAW_CONFIG_PATH = join(homedir(), '.openclaw', 'openclaw.json');
 const FEISHU_PLUGIN_ID_CANDIDATES = ['openclaw-lark', 'feishu-openclaw-plugin'] as const;
 const VALID_COMPACTION_MODES = new Set(['default', 'safeguard']);
+const VALID_WEB_SEARCH_PROVIDERS = new Set(['brave', 'perplexity', 'grok', 'gemini', 'kimi']);
 
 async function readOpenClawJson(): Promise<Record<string, unknown>> {
   return (await readJsonFile<Record<string, unknown>>(OPENCLAW_CONFIG_PATH)) ?? {};
@@ -998,6 +999,15 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     const config = await readOpenClawJson();
     let modified = false;
 
+    // ── top-level legacy keys ──────────────────────────────────────
+    // Some external tools or newer OpenClaw builds may persist root-level `mcp`
+    // config that the bundled OpenClaw version does not recognize.
+    if ('mcp' in config) {
+      console.log('[sanitize] Removing unsupported top-level key "mcp" from openclaw.json');
+      delete config.mcp;
+      modified = true;
+    }
+
     // ── skills section ──────────────────────────────────────────────
     // OpenClaw's Zod schema uses .strict() on the skills object, accepting
     // only: allowBundled, load, install, limits, entries.
@@ -1013,6 +1023,40 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
           console.log(`[sanitize] Removing misplaced key "skills.${key}" from openclaw.json`);
           delete skillsObj[key];
           modified = true;
+        }
+      }
+    }
+
+    // ── agents heartbeat legacy keys ───────────────────────────────
+    // Older configs may persist heartbeat.isolatedSession. Current OpenClaw
+    // uses explicit heartbeat.session and rejects isolatedSession entirely.
+    const agents = config.agents;
+    if (agents && typeof agents === 'object' && !Array.isArray(agents)) {
+      const agentsObj = agents as Record<string, unknown>;
+      const sanitizeHeartbeat = (heartbeat: unknown, path: string): boolean => {
+        if (!heartbeat || typeof heartbeat !== 'object' || Array.isArray(heartbeat)) return false;
+        const heartbeatObj = heartbeat as Record<string, unknown>;
+        if (!('isolatedSession' in heartbeatObj)) return false;
+        console.log(`[sanitize] Removing legacy key "${path}.isolatedSession" from openclaw.json`);
+        delete heartbeatObj.isolatedSession;
+        return true;
+      };
+
+      const defaults = agentsObj.defaults;
+      if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+        const defaultsObj = defaults as Record<string, unknown>;
+        if (sanitizeHeartbeat(defaultsObj.heartbeat, 'agents.defaults.heartbeat')) {
+          modified = true;
+        }
+      }
+
+      if (Array.isArray(agentsObj.list)) {
+        for (const [index, entry] of agentsObj.list.entries()) {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+          const entryObj = entry as Record<string, unknown>;
+          if (sanitizeHeartbeat(entryObj.heartbeat, `agents.list.${index}.heartbeat`)) {
+            modified = true;
+          }
         }
       }
     }
@@ -1112,6 +1156,37 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
         tools.web = web;
         config.tools = tools;
         modified = true;
+      }
+    }
+
+    // Current bundled OpenClaw only accepts a fixed provider enum here.
+    // If an older/newer config wrote a different value, remove it and let
+    // OpenClaw auto-detect from available credentials instead.
+    {
+      const tools = (config.tools as Record<string, unknown> | undefined) || {};
+      const web = (tools.web as Record<string, unknown> | undefined) || {};
+      const search = (web.search as Record<string, unknown> | undefined) || {};
+      const rawProvider = typeof search.provider === 'string' ? search.provider : null;
+      const normalizedProvider = rawProvider?.trim().toLowerCase() ?? '';
+
+      if (rawProvider) {
+        if (normalizedProvider && VALID_WEB_SEARCH_PROVIDERS.has(normalizedProvider)) {
+          if (search.provider !== normalizedProvider) {
+            search.provider = normalizedProvider;
+            web.search = search;
+            tools.web = web;
+            config.tools = tools;
+            modified = true;
+            console.log(`[sanitize] Normalized tools.web.search.provider -> "${normalizedProvider}"`);
+          }
+        } else {
+          delete search.provider;
+          web.search = search;
+          tools.web = web;
+          config.tools = tools;
+          modified = true;
+          console.log(`[sanitize] Removing invalid "tools.web.search.provider" value "${rawProvider}" to allow auto-detect`);
+        }
       }
     }
 

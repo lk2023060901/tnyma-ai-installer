@@ -40,6 +40,7 @@ async function sanitizeConfig(filePath: string): Promise<boolean> {
 
   const config = JSON.parse(raw) as Record<string, unknown>;
   let modified = false;
+  const VALID_WEB_SEARCH_PROVIDERS = new Set(['brave', 'perplexity', 'grok', 'gemini', 'kimi']);
 
   /** Non-throwing async existence check. */
   async function fileExists(p: string): Promise<boolean> {
@@ -51,6 +52,11 @@ async function sanitizeConfig(filePath: string): Promise<boolean> {
     }
   }
 
+  if ('mcp' in config) {
+    delete config.mcp;
+    modified = true;
+  }
+
   // Mirror of the production blocklist logic
   const skills = config.skills;
   if (skills && typeof skills === 'object' && !Array.isArray(skills)) {
@@ -60,6 +66,36 @@ async function sanitizeConfig(filePath: string): Promise<boolean> {
       if (key in skillsObj) {
         delete skillsObj[key];
         modified = true;
+      }
+    }
+  }
+
+  const agents = config.agents;
+  if (agents && typeof agents === 'object' && !Array.isArray(agents)) {
+    const agentsObj = agents as Record<string, unknown>;
+    const sanitizeHeartbeat = (heartbeat: unknown): boolean => {
+      if (!heartbeat || typeof heartbeat !== 'object' || Array.isArray(heartbeat)) return false;
+      const heartbeatObj = heartbeat as Record<string, unknown>;
+      if (!('isolatedSession' in heartbeatObj)) return false;
+      delete heartbeatObj.isolatedSession;
+      return true;
+    };
+
+    const defaults = agentsObj.defaults;
+    if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+      const defaultsObj = defaults as Record<string, unknown>;
+      if (sanitizeHeartbeat(defaultsObj.heartbeat)) {
+        modified = true;
+      }
+    }
+
+    if (Array.isArray(agentsObj.list)) {
+      for (const entry of agentsObj.list) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        const entryObj = entry as Record<string, unknown>;
+        if (sanitizeHeartbeat(entryObj.heartbeat)) {
+          modified = true;
+        }
       }
     }
   }
@@ -120,6 +156,32 @@ async function sanitizeConfig(filePath: string): Promise<boolean> {
       tools.web = web;
       config.tools = tools;
       modified = true;
+    }
+  }
+
+  {
+    const tools = (config.tools as Record<string, unknown> | undefined) || {};
+    const web = (tools.web as Record<string, unknown> | undefined) || {};
+    const search = (web.search as Record<string, unknown> | undefined) || {};
+    const rawProvider = typeof search.provider === 'string' ? search.provider : null;
+    const normalizedProvider = rawProvider?.trim().toLowerCase() ?? '';
+
+    if (rawProvider) {
+      if (normalizedProvider && VALID_WEB_SEARCH_PROVIDERS.has(normalizedProvider)) {
+        if (search.provider !== normalizedProvider) {
+          search.provider = normalizedProvider;
+          web.search = search;
+          tools.web = web;
+          config.tools = tools;
+          modified = true;
+        }
+      } else {
+        delete search.provider;
+        web.search = search;
+        tools.web = web;
+        config.tools = tools;
+        modified = true;
+      }
     }
   }
 
@@ -294,6 +356,62 @@ describe('sanitizeOpenClawConfig (blocklist approach)', () => {
     expect(result.agents).toEqual({ defaults: { model: { primary: 'gpt-4' } } });
   });
 
+  it('removes unsupported top-level mcp config', async () => {
+    await writeConfig({
+      mcp: {
+        servers: {
+          chrome: { command: 'npx', args: ['chrome-devtools-mcp@latest'] },
+        },
+      },
+      gateway: { mode: 'local' },
+    });
+
+    const modified = await sanitizeConfig(configPath);
+    expect(modified).toBe(true);
+
+    const result = await readConfig();
+    expect(result).not.toHaveProperty('mcp');
+    expect(result.gateway).toEqual({ mode: 'local' });
+  });
+
+  it('removes legacy heartbeat.isolatedSession from agent defaults and list entries', async () => {
+    await writeConfig({
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: '30m',
+            isolatedSession: true,
+          },
+        },
+        list: [
+          { id: 'agent-a' },
+          {
+            id: 'agent-b',
+            heartbeat: {
+              every: '15m',
+              isolatedSession: false,
+            },
+          },
+        ],
+      },
+    });
+
+    const modified = await sanitizeConfig(configPath);
+    expect(modified).toBe(true);
+
+    const result = await readConfig();
+    const agents = result.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const defaultHeartbeat = defaults.heartbeat as Record<string, unknown>;
+    const list = agents.list as Array<Record<string, unknown>>;
+    const listHeartbeat = list[1].heartbeat as Record<string, unknown>;
+
+    expect(defaultHeartbeat).not.toHaveProperty('isolatedSession');
+    expect(defaultHeartbeat.every).toBe('30m');
+    expect(listHeartbeat).not.toHaveProperty('isolatedSession');
+    expect(listHeartbeat.every).toBe('15m');
+  });
+
   it('removes tools.web.search.kimi.apiKey when moonshot provider exists', async () => {
     await writeConfig({
       models: {
@@ -320,6 +438,29 @@ describe('sanitizeOpenClawConfig (blocklist approach)', () => {
     const kimi = ((((result.tools as Record<string, unknown>).web as Record<string, unknown>).search as Record<string, unknown>).kimi as Record<string, unknown>);
     expect(kimi).not.toHaveProperty('apiKey');
     expect(kimi.baseUrl).toBe('https://api.moonshot.cn/v1');
+  });
+
+  it('removes invalid tools.web.search.provider to allow auto-detect', async () => {
+    await writeConfig({
+      tools: {
+        web: {
+          search: {
+            provider: 'openrouter',
+            kimi: {
+              apiKey: 'abc',
+            },
+          },
+        },
+      },
+    });
+
+    const modified = await sanitizeConfig(configPath);
+    expect(modified).toBe(true);
+
+    const result = await readConfig();
+    const search = (((result.tools as Record<string, unknown>).web as Record<string, unknown>).search as Record<string, unknown>);
+    expect(search).not.toHaveProperty('provider');
+    expect(search.kimi).toEqual({ apiKey: 'abc' });
   });
 
   it('keeps tools.web.search.kimi.apiKey when moonshot provider is absent', async () => {
