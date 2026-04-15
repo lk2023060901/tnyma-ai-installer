@@ -77,8 +77,13 @@ function ensureSourceRoot() {
 }
 
 function runPnpmBuildWeb() {
-  const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-  const result = spawnSync(pnpmCommand, ['build:web'], {
+  const command = process.platform === 'win32'
+    ? (process.env.ComSpec || 'cmd.exe')
+    : 'pnpm';
+  const args = process.platform === 'win32'
+    ? ['/d', '/s', '/c', 'pnpm build:web']
+    : ['build:web'];
+  const result = spawnSync(command, args, {
     cwd: SOURCE_ROOT,
     stdio: 'inherit',
     env: {
@@ -88,7 +93,8 @@ function runPnpmBuildWeb() {
   });
 
   if (result.status !== 0) {
-    throw new Error(`pnpm build:web failed with exit code ${result.status ?? 'unknown'}`);
+    const failureDetail = result.error?.message || `exit code ${result.status ?? 'unknown'}`;
+    throw new Error(`pnpm build:web failed with ${failureDetail}`);
   }
 }
 
