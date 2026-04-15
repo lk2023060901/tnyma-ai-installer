@@ -78,6 +78,10 @@ mac:
   darkModeSupport: true
   hardenedRuntime: true
   gatekeeperAssess: false
+  # Skip per-file signing for static assets; the app bundle signature still
+  # seals them, while native code continues to be signed individually.
+  signIgnore:
+    - "\\.(png|jpg|jpeg|gif|webp|svg|ico|icns|bcmap|pak)$"
   entitlements: entitlements.mac.plist
   entitlementsInherit: entitlements.mac.plist
   notarize: true

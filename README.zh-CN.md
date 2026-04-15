@@ -132,7 +132,7 @@ Provider 配置现在直接跟随 OpenClaw 上游的 auth choice 目录，而不
 ### 🚀 开机启动控制
 在 **设置 → 通用** 中，你可以开启 **开机自动启动**，让 TnymaAI 在系统登录后于后台自动启动。
 如果 **自动启动网关** 保持开启，后台启动时也会自动恢复 OpenClaw Gateway，而不会重新弹出设置向导。
-一旦初次配置完成，之后再次打开 TnymaAI 时会进入一个轻量的 Control UI 启动页，而不再回到多步骤安装向导。
+一旦初次配置完成，之后再次打开 TnymaAI 时会进入一个轻量的 Control UI 启动页，它会打开安装器内置的 TnymaAI Web 页面，而不再回到多步骤安装向导。
 
 ---
 
@@ -354,6 +354,7 @@ pnpm package              # 为当前平台打包（包含预装技能资源）
 pnpm package:mac          # 为 macOS 打包
 pnpm package:win          # 为 Windows 打包
 pnpm package:linux        # 为 Linux 打包
+pnpm run cleanup:installed:mac -- --yes  # 清理已安装的 macOS 应用数据、登录项和 CLI 残留
 ```
 
 ### 通信回归检查

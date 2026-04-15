@@ -43,6 +43,7 @@ import { deviceOAuthManager } from '../utils/device-oauth';
 import { browserOAuthManager } from '../utils/browser-oauth';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { syncAllProviderAuthToRuntime } from '../services/providers/provider-runtime-sync';
+import { InstallerWebStackManager } from '../services/installer-web-stack';
 
 const WINDOWS_APP_USER_MODEL_ID = 'app.tnyma-ai.desktop';
 
@@ -115,6 +116,7 @@ let gatewayManager!: GatewayManager;
 let clawHubService!: ClawHubService;
 let hostEventBus!: HostEventBus;
 let hostApiServer: Server | null = null;
+let installerWebStackManager!: InstallerWebStackManager;
 const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
 const backgroundLaunchRequested = isBackgroundLaunchRequested();
@@ -310,6 +312,7 @@ async function initialize(): Promise<void> {
   hostApiServer = startHostApiServer({
     gatewayManager,
     clawHubService,
+    installerWebStackManager,
     eventBus: hostEventBus,
     mainWindow: window,
   });
@@ -479,6 +482,7 @@ if (gotTheLock) {
   gatewayManager = new GatewayManager();
   clawHubService = new ClawHubService();
   hostEventBus = new HostEventBus();
+  installerWebStackManager = new InstallerWebStackManager();
 
   // When a second instance is launched, focus the existing window instead.
   app.on('second-instance', () => {
@@ -541,11 +545,17 @@ if (gotTheLock) {
     const stopPromise = gatewayManager.stop().catch((err) => {
       logger.warn('gatewayManager.stop() error during quit:', err);
     });
+    const installerWebStackStopPromise = installerWebStackManager.stop().catch((err) => {
+      logger.warn('installerWebStackManager.stop() error during quit:', err);
+    });
     const timeoutPromise = new Promise<'timeout'>((resolve) => {
       setTimeout(() => resolve('timeout'), 5000);
     });
 
-    void Promise.race([stopPromise.then(() => 'stopped' as const), timeoutPromise]).then((result) => {
+    void Promise.race([
+      Promise.all([stopPromise, installerWebStackStopPromise]).then(() => 'stopped' as const),
+      timeoutPromise,
+    ]).then((result) => {
       if (result === 'timeout') {
         logger.warn('Gateway shutdown timed out during app quit; proceeding with forced quit');
         void gatewayManager.forceTerminateOwnedProcessForQuit().then((terminated) => {
@@ -568,6 +578,11 @@ if (gotTheLock) {
     logger.error(`${reason}:`, error);
     try {
       void gatewayManager?.stop().catch(() => { /* ignore */ });
+    } catch {
+      // ignore — stop() may not be callable if state is corrupted
+    }
+    try {
+      void installerWebStackManager?.stop().catch(() => { /* ignore */ });
     } catch {
       // ignore — stop() may not be callable if state is corrupted
     }

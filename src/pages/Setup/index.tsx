@@ -129,7 +129,6 @@ import {
 import {
   ensureGatewayReadyForProviderModels,
   fetchProviderModels,
-  getStoredProviderModels,
   requiresManualProviderModelEntry,
   supportsProviderModelCatalog,
   type ProviderModelCatalogEntry,
@@ -217,10 +216,10 @@ async function fetchControlUiUrl(): Promise<string> {
     success: boolean;
     url?: string;
     error?: string;
-  }>('/api/gateway/control-ui');
+  }>('/api/app/control-ui');
 
   if (!result.success || !result.url) {
-    throw new Error(result.error || 'OpenClaw Control UI is unavailable');
+    throw new Error(result.error || 'Installer web UI is unavailable');
   }
 
   return result.url;
@@ -243,7 +242,7 @@ async function waitForControlUiUrl(retries = CONTROL_UI_POLL_RETRIES): Promise<s
 
   throw lastError instanceof Error
     ? lastError
-    : new Error('OpenClaw Control UI did not become ready in time');
+    : new Error('Installer web UI did not become ready in time');
 }
 
 async function ensureGatewayRunning(): Promise<void> {
@@ -2050,13 +2049,14 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const providerData = providers.find((provider) => provider.id === (account?.vendorId ?? selectedProvider));
-  const hasDiscoveredModels = availableModels.length > 0;
+  const shouldShowManualModelInput = requiresManualProviderModelEntry(account);
+  const shouldShowModelSelect = supportsProviderModelCatalog(account);
   const showModelIdField = shouldShowProviderModelId(providerData, devModeUnlocked)
-    || hasDiscoveredModels
-    || requiresManualProviderModelEntry(account);
+    || shouldShowModelSelect
+    || shouldShowManualModelInput;
   const effectiveModelId = modelId.trim();
   const canProceed = Boolean(account && effectiveModelId);
-  const canSyncModels = supportsProviderModelCatalog(account);
+  const canSyncModels = shouldShowModelSelect;
 
   useEffect(() => {
     onCanProceedChange(canProceed);
@@ -2064,10 +2064,8 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
 
   const loadModels = useCallback(async (nextAccount: ProviderAccount) => {
     const nextProvider = providers.find((provider) => provider.id === nextAccount.vendorId);
-    const fallbackModels = getStoredProviderModels(nextAccount);
     const fallbackModelId = nextAccount.model?.trim()
       || nextProvider?.defaultModelId?.trim()
-      || fallbackModels[0]?.id
       || '';
 
     if (!supportsProviderModelCatalog(nextAccount)) {
@@ -2087,21 +2085,20 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
         `/api/provider-accounts/${encodeURIComponent(nextAccount.id)}`,
       );
       const resolvedAccount = refreshedAccount ?? nextAccount;
-      const resolvedModels = models.length > 0 ? models : getStoredProviderModels(resolvedAccount);
-      const resolvedModelId = models[0]?.id
-        || resolvedAccount.model?.trim()
+      const resolvedModels = models;
+      const resolvedModelId = resolvedAccount.model?.trim()
         || nextProvider?.defaultModelId?.trim()
         || resolvedModels[0]?.id
         || '';
 
       setAccount(resolvedAccount);
       setAvailableModels(resolvedModels);
-      setModelId(resolvedModelId);
+      setModelId(resolvedModels.length > 0 ? resolvedModelId : '');
     } catch (error) {
       console.error('Failed to load provider models:', error);
       setAccount(nextAccount);
-      setAvailableModels(fallbackModels);
-      setModelId(fallbackModelId);
+      setAvailableModels([]);
+      setModelId('');
       setLoadError(String(error));
     } finally {
       setModelsLoading(false);
@@ -2215,7 +2212,7 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
             </Button>
           )}
         </div>
-        {showModelIdField && hasDiscoveredModels ? (
+        {showModelIdField && shouldShowModelSelect ? (
           <Select
             id="setup-model-id"
             value={modelId}

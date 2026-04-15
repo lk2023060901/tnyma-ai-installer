@@ -1,13 +1,14 @@
 /**
  * Device OAuth Manager
  *
- * Delegates MiniMax and Qwen OAuth to the OpenClaw extension oauth.ts functions
- * imported directly from the bundled openclaw package at build time.
+ * Delegates MiniMax and legacy Qwen OAuth to the bundled OpenClaw extension
+ * modules resolved at runtime from the packaged openclaw directory.
  *
  * This approach:
  * - Avoids hardcoding client_id (lives in openclaw extension)
  * - Avoids duplicating HTTP OAuth logic
  * - Avoids spawning CLI process (which requires interactive TTY)
+ * - Keeps extension path resolution aligned with the bundled openclaw version
  * - Works identically on macOS, Windows, and Linux
  *
  * The extension oauth.ts files only use `node:crypto` and global `fetch` —
@@ -18,24 +19,103 @@
  */
 import { EventEmitter } from 'events';
 import { BrowserWindow, shell } from 'electron';
+import { existsSync } from 'fs';
+import { createRequire } from 'module';
+import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { logger } from './logger';
 import { saveProvider, getProvider, ProviderConfig } from './secure-storage';
 import { getProviderDefaultModel } from './provider-registry';
-import { isOpenClawPresent } from './paths';
+import { getOpenClawDir, getOpenClawResolvedDir, isOpenClawPresent } from './paths';
 import { proxyAwareFetch } from './proxy-fetch';
-import {
-    loginMiniMaxPortalOAuth,
-    type MiniMaxOAuthToken,
-    type MiniMaxRegion,
-} from '../../node_modules/openclaw/extensions/minimax-portal-auth/oauth';
-import {
-    loginQwenPortalOAuth,
-    type QwenOAuthToken,
-} from '../../node_modules/openclaw/extensions/qwen-portal-auth/oauth';
 import { saveOAuthTokenToOpenClaw, setOpenClawDefaultModelWithOverride } from './openclaw-auth';
 
 export type OAuthProviderType = 'minimax-portal' | 'minimax-portal-cn' | 'qwen-portal';
-export type { MiniMaxRegion };
+export type MiniMaxRegion = 'global' | 'cn';
+
+type MiniMaxOAuthToken = {
+    access: string;
+    refresh: string;
+    expires: number;
+    resourceUrl?: string;
+};
+
+type QwenOAuthToken = {
+    access: string;
+    refresh: string;
+    expires: number;
+    resourceUrl?: string;
+};
+
+type MiniMaxOAuthModule = {
+    loginMiniMaxPortalOAuth: (params: {
+        region?: MiniMaxRegion;
+        openUrl: (url: string) => Promise<void>;
+        note: (message: string, title?: string) => Promise<void>;
+        progress: {
+            update: (msg: string) => void;
+            stop: (msg?: string) => void;
+        };
+    }) => Promise<MiniMaxOAuthToken>;
+};
+
+type QwenOAuthModule = {
+    loginQwenPortalOAuth: (params: {
+        openUrl: (url: string) => Promise<void>;
+        note: (message: string, title?: string) => Promise<void>;
+        progress: {
+            update: (msg: string) => void;
+            stop: (msg?: string) => void;
+        };
+    }) => Promise<QwenOAuthToken>;
+};
+
+const openclawPath = getOpenClawDir();
+const openclawResolvedPath = getOpenClawResolvedDir();
+
+async function importOpenClawModule<T>(relativeCandidates: string[]): Promise<T> {
+    const attemptedPaths: string[] = [];
+
+    for (const relativePath of relativeCandidates) {
+        const absolutePath = join(openclawResolvedPath, relativePath);
+        attemptedPaths.push(absolutePath);
+        if (!existsSync(absolutePath)) {
+            continue;
+        }
+        return await import(pathToFileURL(absolutePath).href) as T;
+    }
+
+    throw new Error(
+        `Failed to locate bundled OpenClaw module. ` +
+        `openclawPath=${openclawPath}, resolvedPath=${openclawResolvedPath}, ` +
+        `attempted=${attemptedPaths.join(', ')}`,
+    );
+}
+
+async function loadMiniMaxPortalOAuth(): Promise<MiniMaxOAuthModule> {
+    return await importOpenClawModule<MiniMaxOAuthModule>([
+        'dist/extensions/minimax/oauth.js',
+        'dist/extensions/minimax/oauth.runtime.js',
+        'extensions/minimax-portal-auth/oauth.js',
+    ]);
+}
+
+async function loadQwenPortalOAuth(): Promise<QwenOAuthModule> {
+    try {
+        return await importOpenClawModule<QwenOAuthModule>([
+            'dist/extensions/qwen/oauth.js',
+            'dist/extensions/qwen/oauth.runtime.js',
+            'extensions/qwen-portal-auth/oauth.js',
+        ]);
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(
+            'Qwen Portal OAuth is not available in the bundled OpenClaw version. ' +
+            'OpenClaw 2026.4.14 removed the deprecated qwen-portal OAuth integration; use Alibaba Cloud Model Studio API key instead. ' +
+            reason,
+        );
+    }
+}
 
 // ─────────────────────────────────────────────────────────────
 // DeviceOAuthManager
@@ -120,6 +200,7 @@ class DeviceOAuthManager extends EventEmitter {
             throw new Error('OpenClaw package not found');
         }
         const provider = this.activeProvider!;
+        const { loginMiniMaxPortalOAuth } = await loadMiniMaxPortalOAuth();
 
         const token: MiniMaxOAuthToken = await this.runWithProxyAwareFetch(() => loginMiniMaxPortalOAuth({
             region,
@@ -170,6 +251,7 @@ class DeviceOAuthManager extends EventEmitter {
             throw new Error('OpenClaw package not found');
         }
         const provider = this.activeProvider!;
+        const { loginQwenPortalOAuth } = await loadQwenPortalOAuth();
 
         const token: QwenOAuthToken = await this.runWithProxyAwareFetch(() => loginQwenPortalOAuth({
             openUrl: async (url) => {

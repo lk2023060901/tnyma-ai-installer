@@ -173,16 +173,16 @@
     },
     "complete": {
         "title": "Setup Complete!",
-        "subtitle": "TnymaAI has finished configuring OpenClaw. The gateway will keep running in the background and the Control UI is ready to open.",
+        "subtitle": "TnymaAI has finished configuring OpenClaw. The gateway will keep running in the background and the bundled TnymaAI web page is ready to open.",
         "provider": "AI Provider",
         "components": "Components",
         "gateway": "Gateway",
         "running": "Running",
-        "footer": "Select Open Control UI to launch the OpenClaw Control UI."
+        "footer": "Select Open Control UI to launch the bundled TnymaAI web page."
     },
     "launcher": {
         "title": "OpenClaw Is Ready",
-        "subtitle": "Setup is complete. The setup wizard stays hidden now and this window only opens the Control UI.",
+        "subtitle": "Setup is complete. The setup wizard stays hidden now and this window only opens the bundled TnymaAI web page.",
         "opening": "Opening..."
     },
     "nav": {

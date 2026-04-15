@@ -155,7 +155,7 @@ export function Sidebar() {
         success: boolean;
         url?: string;
         error?: string;
-      }>('/api/gateway/control-ui');
+      }>('/api/app/control-ui');
       if (result.success && result.url) {
         window.electron.openExternal(result.url);
       } else {

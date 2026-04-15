@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { deflateSync } from 'node:zlib';
-import type { Cookie, Session } from 'electron';
+import type { BrowserWindow, Cookie, Session } from 'electron';
 import { getOpenClawResolvedDir } from './paths';
 import { logger } from './logger';
 import { buildElectronProxyConfig } from './proxy';
@@ -24,6 +24,7 @@ const QQ_POLL_URL = `${QQ_BASE_URL}/lite/poll`;
 const QQ_CREATE_BOT_URL = `${QQ_BOT_BASE_URL}/cgi-bin/lite_create`;
 const QQ_UPLOAD_AVATAR_URL = `${QQ_BOT_BASE_URL}/cgi-bin/resource/lite_upload_avatar`;
 const QQ_MODIFY_BOT_URL = `${QQ_BOT_BASE_URL}/cgi-bin/info/lite_modify`;
+const QQ_DEVELOPER_SETTING_URL = `${QQ_BASE_URL}/qqbot/#/developer/developer-setting`;
 const QQ_DEFAULT_BKN = '5381';
 const QQ_LOGIN_EXPIRED_RETCODE = 10004;
 const QQ_POLL_SUCCESS = 0;
@@ -35,6 +36,10 @@ const FIRST_QR_TIMEOUT_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 8 * 60_000;
 const SESSION_TIMEOUT_MS = 10 * 60_000;
 const QQ_POLL_INTERVAL_MS = 2_000;
+const QQ_CREATE_SETTLE_MS = 1_200;
+const QQ_CREDENTIAL_WAIT_ATTEMPTS = 12;
+const QQ_POST_SUBMIT_RECONCILE_ATTEMPTS = 6;
+const DEBUGGER_ATTACH_TIMEOUT_MS = 3_000;
 const WELCOME_MESSAGE_TIMEOUT_MS = 10_000;
 const WELCOME_MESSAGE_RETRY_COUNT = 3;
 const DEFAULT_APP_DESCRIPTION = 'Created by TnymaAI';
@@ -43,6 +48,21 @@ const QQ_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 const SESSION_EVENT_QR = 'qr';
 const SESSION_EVENT_PROGRESS = 'progress';
+const QQ_SECRET_BUTTON_HINTS = ['生成密钥', '查看密钥', '显示密钥', '生成 secret', '查看 secret', 'secret'];
+const QQ_ACK_BUTTON_HINTS = ['我知道了', '知道了', '关闭'];
+const QQ_ENTRY_BUTTON_HINTS = ['立即使用', '进入控制台', '进入开发台', '前往控制台', '开始创建', '创建机器人'];
+const QQ_ENTRY_BLOCKED_BUTTON_HINTS = ['立即注册', '帮助文档', '查看全部公告'];
+const QQ_COPY_APP_ID_BUTTON_HINTS = ['复制 AppID', '复制AppID', '复制应用ID', '复制机器人ID', '复制 Client ID'];
+const QQ_COPY_SECRET_BUTTON_HINTS = [
+  '复制 Client Secret',
+  '复制Client Secret',
+  '复制 App Secret',
+  '复制App Secret',
+  '复制 Secret',
+  '复制Secret',
+  '复制密钥',
+] as const;
+const QQ_BLOCKED_BUTTON_HINTS = ['取消', '返回', '关闭', '删除', '重置', '撤销'];
 const require = createRequire(import.meta.url);
 
 type Deferred<T> = {
@@ -74,6 +94,21 @@ type QQBotRequestContext = {
 type QQBotCreateResponse = {
   appid?: string;
   client_secret?: string;
+};
+
+type QqBotCredentials = {
+  appId?: string;
+  clientSecret?: string;
+  developerId?: string;
+};
+
+type ChromeDebuggerEvent = {
+  requestId?: string;
+  response?: {
+    mimeType?: string;
+    url?: string;
+  };
+  errorText?: string;
 };
 
 type QQBotCreateSessionResponse = {
@@ -181,6 +216,178 @@ function buildAutoCreateWelcomeMessage(botName: string): string {
     return `欢迎使用 ${trimmed}！我是由 TnymaAI 创建的机器人，现在已经准备就绪。`;
   }
   return DEFAULT_WELCOME_MESSAGE;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function mergeQqCredentials(primary: QqBotCredentials, fallback: QqBotCredentials = {}): QqBotCredentials {
+  return {
+    appId: normalizeOptionalString(primary.appId) || normalizeOptionalString(fallback.appId),
+    clientSecret: normalizeOptionalString(primary.clientSecret) || normalizeOptionalString(fallback.clientSecret),
+    developerId: normalizeOptionalString(primary.developerId) || normalizeOptionalString(fallback.developerId),
+  };
+}
+
+function isPotentialAppId(value: string): boolean {
+  return /^\d{5,}$/.test(value.trim());
+}
+
+function isPotentialSecret(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length >= 12 && /^[A-Za-z0-9_-]+$/.test(trimmed) && /[A-Za-z]/.test(trimmed);
+}
+
+function hasCompleteQqCredentials(credentials: QqBotCredentials): credentials is Required<Pick<QqBotCredentials, 'appId' | 'clientSecret'>> {
+  return Boolean(credentials.appId && credentials.clientSecret);
+}
+
+function extractAppIdFromUrl(url: string): string | undefined {
+  const match = url.match(/[?&#](?:appId|appid|clientId|client_id)=([^&#]+)/iu);
+  const candidate = match?.[1] ? decodeURIComponent(match[1]).trim() : '';
+  return isPotentialAppId(candidate) ? candidate : undefined;
+}
+
+export function extractQqCredentialsFromText(text: string): QqBotCredentials {
+  const value = String(text || '');
+  const trimmedValue = value.trim();
+  if (isPotentialAppId(trimmedValue) || isPotentialSecret(trimmedValue)) {
+    return {
+      appId: isPotentialAppId(trimmedValue) ? trimmedValue : undefined,
+      clientSecret: isPotentialSecret(trimmedValue) ? trimmedValue : undefined,
+    };
+  }
+
+  const matches = [
+    {
+      key: 'appId' as const,
+      patterns: [
+        /(?:app[\s_-]*id|client[\s_-]*id)\s*["'=：:\s>]+(\d{5,})/iu,
+        /(?:App\s*ID|AppID|Client\s*ID|ClientID|应用\s*ID|机器人\s*ID)\s*[:：]?\s*(\d{5,})/iu,
+        /(?:appid|clientid)\s*[=:]\s*["']?(\d{5,})["']?/iu,
+      ],
+    },
+    {
+      key: 'clientSecret' as const,
+      patterns: [
+        /(?:app[\s_-]*secret|client[\s_-]*secret|secret)\s*["'=：:\s>]+([A-Za-z0-9_-]{12,})/iu,
+        /(?:App\s*Secret|AppSecret|Client\s*Secret|ClientSecret|Secret|密钥)\s*[:：]?\s*([A-Za-z0-9_-]{12,})/iu,
+        /(?:appsecret|clientsecret|secret)\s*[=:]\s*["']?([A-Za-z0-9_-]{12,})["']?/iu,
+      ],
+    },
+    {
+      key: 'developerId' as const,
+      patterns: [
+        /(?:developer[_\s-]*id|开发者\s*ID)\s*[:：]?\s*([A-Za-z0-9_-]{3,})/iu,
+      ],
+    },
+  ];
+
+  const result: QqBotCredentials = {};
+  for (const entry of matches) {
+    for (const pattern of entry.patterns) {
+      const match = value.match(pattern);
+      const candidate = match?.[1]?.trim();
+      if (!candidate) continue;
+      if (entry.key === 'appId' && !isPotentialAppId(candidate)) continue;
+      if (entry.key === 'clientSecret' && !isPotentialSecret(candidate)) continue;
+      result[entry.key] = candidate;
+      break;
+    }
+  }
+
+  if (!result.appId && isPotentialAppId(trimmedValue)) {
+    result.appId = trimmedValue;
+  }
+  if (!result.clientSecret && isPotentialSecret(trimmedValue)) {
+    result.clientSecret = trimmedValue;
+  }
+
+  return result;
+}
+
+export function extractQqCredentialsFromPayload(payload: unknown): QqBotCredentials {
+  const result: QqBotCredentials = {};
+
+  function visit(value: unknown, parentKey = '') {
+    if (result.appId && result.clientSecret && result.developerId) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        visit(entry, parentKey);
+      }
+      return;
+    }
+
+    if (typeof value === 'object' && value) {
+      for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+        const normalizedKey = key.toLowerCase();
+        if (!result.appId && ['appid', 'app_id', 'clientid', 'client_id'].includes(normalizedKey)) {
+          const candidate = normalizeOptionalString(nested);
+          if (candidate && isPotentialAppId(candidate)) {
+            result.appId = candidate;
+          }
+        }
+
+        if (
+          !result.clientSecret
+          && ['appsecret', 'app_secret', 'clientsecret', 'client_secret', 'secret'].includes(normalizedKey)
+        ) {
+          const candidate = normalizeOptionalString(nested);
+          if (candidate && isPotentialSecret(candidate)) {
+            result.clientSecret = candidate;
+          }
+        }
+
+        if (!result.developerId && ['developerid', 'developer_id'].includes(normalizedKey)) {
+          const candidate = normalizeOptionalString(nested);
+          if (candidate) {
+            result.developerId = candidate;
+          }
+        }
+
+        visit(nested, normalizedKey || parentKey);
+      }
+      return;
+    }
+
+    if (typeof value !== 'string') {
+      return;
+    }
+
+    const candidate = value.trim();
+    if (!candidate) {
+      return;
+    }
+
+    if (!result.appId && parentKey && ['appid', 'app_id', 'clientid', 'client_id'].includes(parentKey)) {
+      if (isPotentialAppId(candidate)) {
+        result.appId = candidate;
+      }
+      return;
+    }
+
+    if (
+      !result.clientSecret
+      && parentKey
+      && ['appsecret', 'app_secret', 'clientsecret', 'client_secret', 'secret'].includes(parentKey)
+    ) {
+      if (isPotentialSecret(candidate)) {
+        result.clientSecret = candidate;
+      }
+      return;
+    }
+
+    if (!result.developerId && parentKey && ['developerid', 'developer_id'].includes(parentKey)) {
+      result.developerId = candidate;
+    }
+  }
+
+  visit(payload);
+  return result;
 }
 
 function getQrRenderDeps(): QrRenderDeps {
@@ -324,6 +531,228 @@ async function createRequestSession(partition: string): Promise<Session> {
   return requestSession;
 }
 
+async function createLoginWindow(partition: string): Promise<BrowserWindow> {
+  if (!process.versions.electron) {
+    throw new Error('QQ bot auto-create requires Electron main-process windows.');
+  }
+
+  const { BrowserWindow } = await import('electron');
+  const loginWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      backgroundThrottling: false,
+      partition,
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      spellcheck: false,
+    },
+  });
+  loginWindow.webContents.setUserAgent(QQ_USER_AGENT);
+  return loginWindow;
+}
+
+async function executeInLoginWindow<T>(
+  loginWindow: BrowserWindow,
+  functionBody: string,
+  payload?: unknown,
+): Promise<T> {
+  const payloadLiteral = JSON.stringify(payload ?? null);
+  return await loginWindow.webContents.executeJavaScript(`(${functionBody})(${payloadLiteral})`, true) as T;
+}
+
+function isNavigationAbortError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('(-3)') || message.includes('ERR_ABORTED');
+}
+
+async function loadQqPage(loginWindow: BrowserWindow, url: string): Promise<void> {
+  try {
+    await loginWindow.loadURL(url, { userAgent: QQ_USER_AGENT });
+  } catch (error) {
+    if (!isNavigationAbortError(error)) {
+      throw error;
+    }
+  }
+  await delay(QQ_CREATE_SETTLE_MS);
+}
+
+const clickButtonByHintsInPage = `
+(payload) => {
+  const { allowed, blocked, matchIndex = 0 } = payload || {};
+  const normalizedAllowed = Array.isArray(allowed) ? allowed.map((entry) => String(entry).toLowerCase()) : [];
+  const normalizedBlocked = Array.isArray(blocked) ? blocked.map((entry) => String(entry).toLowerCase()) : [];
+  const candidateAttributes = [
+    'aria-label',
+    'title',
+    'name',
+    'id',
+    'data-title',
+    'data-label',
+    'data-name',
+    'data-testid',
+    'data-copy-text',
+    'data-clipboard-text',
+    'data-content',
+    'data-value',
+  ];
+  const nodes = Array.from(
+    document.querySelectorAll("button, [role='button'], a, input[type='button'], input[type='submit']"),
+  );
+
+  let matchedIndex = 0;
+  for (const rawNode of nodes) {
+    const node = rawNode;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    const isVisible = style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+    if (!isVisible) continue;
+
+    const inputValue = node instanceof HTMLInputElement ? node.value : '';
+    const fragments = [
+      node.innerText || '',
+      node.textContent || '',
+      inputValue,
+      node.parentElement?.textContent || '',
+      node.closest('label')?.textContent || '',
+      ...candidateAttributes.map((attributeName) => node.getAttribute(attributeName) || ''),
+    ];
+    const descriptor = fragments.join(' ').toLowerCase();
+    if (!descriptor) continue;
+    if (normalizedBlocked.some((hint) => descriptor.includes(hint))) continue;
+    if (!normalizedAllowed.some((hint) => descriptor.includes(hint))) continue;
+    if (matchedIndex < matchIndex) {
+      matchedIndex += 1;
+      continue;
+    }
+
+    node.click();
+    return true;
+  }
+
+  return false;
+}
+`;
+
+const extractQqCredentialsSnapshotInPage = `
+() => {
+  const candidateAttributes = [
+    'data-appid',
+    'data-app-id',
+    'data-client-id',
+    'data-clientid',
+    'data-secret',
+    'data-app-secret',
+    'data-client-secret',
+    'data-clientsecret',
+    'data-clipboard-text',
+    'data-copy-text',
+    'data-value',
+    'data-content',
+    'title',
+    'aria-label',
+    'href',
+  ];
+
+  const inputs = Array.from(document.querySelectorAll('input, textarea'))
+    .map((field) => {
+      const element = field;
+      const labels = [
+        element.placeholder,
+        element.getAttribute('aria-label') || '',
+        element.getAttribute('name') || '',
+        element.id || '',
+        element.closest('label')?.textContent || '',
+        element.parentElement?.textContent || '',
+        element.value || '',
+      ];
+      return labels.join(' ');
+    })
+    .join('\\n');
+
+  const attributeText = Array.from(document.querySelectorAll('*'))
+    .flatMap((node) =>
+      candidateAttributes
+        .map((attributeName) => node.getAttribute(attributeName) || '')
+        .filter(Boolean),
+    )
+    .join('\\n');
+
+  return {
+    text: \`\${document.body?.innerText || ''}\\n\${inputs}\\n\${attributeText}\`,
+    url: window.location.href,
+  };
+}
+`;
+
+const extractQqCredentialDebugInPage = `
+() => {
+  const nodes = Array.from(
+    document.querySelectorAll("button, [role='button'], a, input[type='button'], input[type='submit']"),
+  );
+
+  const buttons = nodes
+    .map((node) => {
+      const element = node;
+      const text = [
+        element.innerText || '',
+        element.textContent || '',
+        element.getAttribute('aria-label') || '',
+        element.getAttribute('title') || '',
+        element.getAttribute('data-copy-text') || '',
+        element.getAttribute('data-clipboard-text') || '',
+      ]
+        .join(' ')
+        .replace(/\\s+/g, ' ')
+        .trim();
+      return text;
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+
+  return {
+    url: window.location.href,
+    buttons,
+  };
+}
+`;
+
+const clickQqEntityByNameInPage = `
+(payload) => {
+  const normalizedName = String(payload?.name || '').trim().toLowerCase();
+  if (!normalizedName) {
+    return false;
+  }
+
+  const nodes = Array.from(document.querySelectorAll("a, button, [role='button'], [data-appid], [data-client-id], [data-app-id]"));
+  for (const rawNode of nodes) {
+    const node = rawNode;
+    const descriptor = [
+      node.textContent || '',
+      node.getAttribute('aria-label') || '',
+      node.getAttribute('title') || '',
+      node.getAttribute('href') || '',
+      node.getAttribute('data-title') || '',
+      node.getAttribute('data-label') || '',
+      node.parentElement?.textContent || '',
+    ]
+      .join(' ')
+      .toLowerCase();
+    if (!descriptor.includes(normalizedName)) continue;
+
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    const isVisible = style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+    if (!isVisible) continue;
+
+    node.click();
+    return true;
+  }
+
+  return false;
+}
+`;
+
 function buildRequestHeaders(referer: string, contentType = 'application/json'): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/json, text/plain, */*',
@@ -363,6 +792,288 @@ function buildMergedCookieString(primary: string, fallback: string): string {
   return Array.from(merged.entries())
     .map(([name, value]) => `${name}=${value}`)
     .join('; ');
+}
+
+async function clickButtonByHints(
+  loginWindow: BrowserWindow,
+  allowed: readonly string[],
+  blocked: readonly string[] = [],
+  matchIndex = 0,
+): Promise<boolean> {
+  return await executeInLoginWindow<boolean>(loginWindow, clickButtonByHintsInPage, {
+    allowed,
+    blocked,
+    matchIndex,
+  }).catch(() => false);
+}
+
+async function clickQqEntityByName(loginWindow: BrowserWindow, name: string): Promise<boolean> {
+  return await executeInLoginWindow<boolean>(loginWindow, clickQqEntityByNameInPage, { name }).catch(() => false);
+}
+
+async function extractQqCredentialsFromWindow(loginWindow: BrowserWindow): Promise<QqBotCredentials> {
+  const snapshot = await executeInLoginWindow<{ text: string; url: string }>(loginWindow, extractQqCredentialsSnapshotInPage);
+  const textCredentials = extractQqCredentialsFromText(snapshot.text);
+  return mergeQqCredentials(
+    {
+      ...textCredentials,
+      appId: textCredentials.appId || extractAppIdFromUrl(snapshot.url),
+    },
+    {},
+  );
+}
+
+async function buildQqCredentialFailureSummary(
+  loginWindow: BrowserWindow,
+  responseState: QqBotCredentials,
+): Promise<string> {
+  const [snapshot, debug] = await Promise.all([
+    executeInLoginWindow<{ text: string; url: string }>(loginWindow, extractQqCredentialsSnapshotInPage)
+      .catch(() => ({ text: '', url: loginWindow.webContents.getURL() })),
+    executeInLoginWindow<{ url: string; buttons: string[] }>(loginWindow, extractQqCredentialDebugInPage)
+      .catch(() => ({ url: loginWindow.webContents.getURL(), buttons: [] })),
+  ]);
+  const snapshotCredentials = extractQqCredentialsFromText(snapshot.text);
+  const merged = mergeQqCredentials(snapshotCredentials, responseState);
+  return [
+    `url=${debug.url || snapshot.url || loginWindow.webContents.getURL()}`,
+    `appId=${merged.appId || '-'}`,
+    `clientSecret=${merged.clientSecret ? '[captured]' : '-'}`,
+    `buttons=${debug.buttons.join(' | ').slice(0, 240) || '-'}`,
+  ].join('; ');
+}
+
+type QqCredentialTracker = {
+  state: QqBotCredentials;
+  stop: () => void;
+};
+
+async function attachQqCredentialTracker(loginWindow: BrowserWindow): Promise<QqCredentialTracker> {
+  const pendingRequests = new Set<string>();
+  const state: QqBotCredentials = {};
+
+  if (!loginWindow.webContents.debugger.isAttached()) {
+    loginWindow.webContents.debugger.attach('1.3');
+  }
+
+  const handleMessage = async (_event: Electron.Event, method: string, params: ChromeDebuggerEvent) => {
+    if (method === 'Network.responseReceived') {
+      const requestId = params.requestId;
+      const url = params.response?.url || '';
+      const mimeType = String(params.response?.mimeType || '').toLowerCase();
+      if (!requestId) return;
+      if (!url.startsWith(QQ_BASE_URL) && !url.startsWith(QQ_BOT_BASE_URL)) return;
+      if (!mimeType.includes('json') && !/cgi-bin|developer|lite_/iu.test(url)) return;
+      pendingRequests.add(requestId);
+      return;
+    }
+
+    if (method === 'Network.loadingFailed') {
+      if (params.requestId) {
+        pendingRequests.delete(params.requestId);
+      }
+      return;
+    }
+
+    if (method !== 'Network.loadingFinished' || !params.requestId || !pendingRequests.has(params.requestId)) {
+      return;
+    }
+
+    pendingRequests.delete(params.requestId);
+    if (!loginWindow.webContents.debugger.isAttached()) {
+      return;
+    }
+
+    const bodyResult = await loginWindow.webContents.debugger
+      .sendCommand('Network.getResponseBody', { requestId: params.requestId })
+      .catch(() => null);
+    const rawBody = typeof bodyResult?.body === 'string'
+      ? (bodyResult.base64Encoded ? Buffer.from(bodyResult.body, 'base64').toString('utf8') : bodyResult.body)
+      : '';
+    if (!rawBody) {
+      return;
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return;
+    }
+
+    const merged = mergeQqCredentials(extractQqCredentialsFromPayload(payload), state);
+    state.appId = merged.appId;
+    state.clientSecret = merged.clientSecret;
+    state.developerId = merged.developerId;
+  };
+
+  loginWindow.webContents.debugger.on('message', handleMessage);
+  await loginWindow.webContents.debugger.sendCommand('Network.enable');
+
+  return {
+    state,
+    stop() {
+      loginWindow.webContents.debugger.off('message', handleMessage);
+      if (loginWindow.webContents.debugger.isAttached()) {
+        try {
+          loginWindow.webContents.debugger.detach();
+        } catch {
+          // Ignore debugger detach failures during cleanup.
+        }
+      }
+    },
+  };
+}
+
+async function attachQqCredentialTrackerBestEffort(loginWindow: BrowserWindow): Promise<QqCredentialTracker | null> {
+  return await withTimeout(
+    attachQqCredentialTracker(loginWindow),
+    DEBUGGER_ATTACH_TIMEOUT_MS,
+    'Timed out while attaching the QQ credential tracker.',
+  ).catch((error) => {
+    logger.warn(`QQ auto-create continuing without credential tracker: ${String(error)}`);
+    return null;
+  });
+}
+
+async function readCurrentQqCredentials(
+  loginWindow: BrowserWindow,
+  responseState: QqBotCredentials,
+): Promise<QqBotCredentials> {
+  const pageCredentials = await extractQqCredentialsFromWindow(loginWindow);
+  return mergeQqCredentials(pageCredentials, responseState);
+}
+
+async function waitForQqCredentials(
+  loginWindow: BrowserWindow,
+  responseState: QqBotCredentials,
+  attempts = QQ_CREDENTIAL_WAIT_ATTEMPTS,
+): Promise<QqBotCredentials> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let credentials = await readCurrentQqCredentials(loginWindow, responseState);
+    if (hasCompleteQqCredentials(credentials)) {
+      return credentials;
+    }
+
+    if (!credentials.clientSecret) {
+      await clickButtonByHints(loginWindow, QQ_SECRET_BUTTON_HINTS, QQ_BLOCKED_BUTTON_HINTS).catch(() => false);
+      await delay(300);
+      credentials = mergeQqCredentials(await readCurrentQqCredentials(loginWindow, responseState), credentials);
+    }
+
+    if (!credentials.appId) {
+      await clickButtonByHints(loginWindow, QQ_COPY_APP_ID_BUTTON_HINTS, QQ_BLOCKED_BUTTON_HINTS).catch(() => false);
+      await delay(200);
+      credentials = mergeQqCredentials(await readCurrentQqCredentials(loginWindow, responseState), credentials);
+    }
+
+    if (!credentials.clientSecret) {
+      await clickButtonByHints(loginWindow, QQ_COPY_SECRET_BUTTON_HINTS, QQ_BLOCKED_BUTTON_HINTS).catch(() => false);
+      await delay(200);
+      credentials = mergeQqCredentials(await readCurrentQqCredentials(loginWindow, responseState), credentials);
+    }
+
+    if (hasCompleteQqCredentials(credentials)) {
+      return credentials;
+    }
+
+    await delay(QQ_CREATE_SETTLE_MS);
+  }
+
+  throw new Error(
+    `QQ 创建流程已完成，但自动读取 AppID / Client Secret 失败。${await buildQqCredentialFailureSummary(loginWindow, responseState)}`,
+  );
+}
+
+async function tryReadQqCredentials(
+  loginWindow: BrowserWindow,
+  responseState: QqBotCredentials,
+  attempts = 2,
+): Promise<QqBotCredentials | undefined> {
+  try {
+    const credentials = await waitForQqCredentials(loginWindow, responseState, attempts);
+    return hasCompleteQqCredentials(credentials) ? credentials : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildQqDeveloperSettingUrl(appId?: string): string {
+  if (!appId) {
+    return QQ_DEVELOPER_SETTING_URL;
+  }
+  return `${QQ_DEVELOPER_SETTING_URL}?appId=${encodeURIComponent(appId)}`;
+}
+
+async function reconcileQqProvisioningResult(
+  partition: string,
+  botName: string,
+  responseState: QqBotCredentials,
+): Promise<QqBotCredentials> {
+  const loginWindow = await createLoginWindow(partition);
+  const tracker = await attachQqCredentialTrackerBestEffort(loginWindow);
+  try {
+    await loadQqPage(loginWindow, buildQqDeveloperSettingUrl(responseState.appId));
+    let credentials = mergeQqCredentials(
+      (await tryReadQqCredentials(loginWindow, mergeQqCredentials(tracker?.state || {}, responseState), 3)) || {},
+      responseState,
+    );
+    if (hasCompleteQqCredentials(credentials)) {
+      return credentials;
+    }
+
+    for (let attempt = 1; attempt <= QQ_POST_SUBMIT_RECONCILE_ATTEMPTS; attempt += 1) {
+      await clickButtonByHints(loginWindow, QQ_ACK_BUTTON_HINTS).catch(() => false);
+
+      credentials = mergeQqCredentials(
+        (await tryReadQqCredentials(loginWindow, mergeQqCredentials(tracker?.state || {}, credentials), 2)) || {},
+        credentials,
+      );
+      if (hasCompleteQqCredentials(credentials)) {
+        return credentials;
+      }
+
+      await loadQqPage(loginWindow, QQ_INDEX_URL);
+      await clickButtonByHints(
+        loginWindow,
+        QQ_ENTRY_BUTTON_HINTS,
+        QQ_ENTRY_BLOCKED_BUTTON_HINTS,
+        Math.max(0, attempt - 1),
+      ).catch(() => false);
+      await delay(QQ_CREATE_SETTLE_MS);
+
+      if (botName) {
+        await clickQqEntityByName(loginWindow, botName).catch(() => false);
+        await delay(QQ_CREATE_SETTLE_MS);
+      }
+
+      credentials = mergeQqCredentials(
+        (await tryReadQqCredentials(loginWindow, mergeQqCredentials(tracker?.state || {}, credentials), 2)) || {},
+        credentials,
+      );
+      if (hasCompleteQqCredentials(credentials)) {
+        return credentials;
+      }
+
+      await loadQqPage(loginWindow, buildQqDeveloperSettingUrl(credentials.appId));
+      credentials = mergeQqCredentials(
+        (await tryReadQqCredentials(loginWindow, mergeQqCredentials(tracker?.state || {}, credentials), 2)) || {},
+        credentials,
+      );
+      if (hasCompleteQqCredentials(credentials)) {
+        return credentials;
+      }
+    }
+
+    throw new Error(
+      `QQ 创建已提交，但未能确认最终 AppID / Client Secret。${await buildQqCredentialFailureSummary(loginWindow, mergeQqCredentials(tracker?.state || {}, responseState))}`,
+    );
+  } finally {
+    tracker?.stop();
+    if (!loginWindow.isDestroyed()) {
+      loginWindow.destroy();
+    }
+  }
 }
 
 async function parseJsonResponse<T>(response: globalThis.Response, label: string): Promise<QQBotApiEnvelope<T>> {
@@ -443,7 +1154,7 @@ async function getQqJson<T>(networkSession: Session, url: string, referer: strin
   return await parseJsonResponse<T>(response, url);
 }
 
-async function createQqBot(ctx: QQBotRequestContext): Promise<{ appId: string; clientSecret: string }> {
+async function createQqBot(ctx: QQBotRequestContext): Promise<QqBotCredentials> {
   const payload = await postQqJson<QQBotCreateResponse>(
     ctx,
     QQ_CREATE_BOT_URL,
@@ -461,13 +1172,14 @@ async function createQqBot(ctx: QQBotRequestContext): Promise<{ appId: string; c
     throw new Error(payload.msg || `QQ bot creation failed with retcode ${String(payload.retcode ?? 'unknown')}.`);
   }
 
-  const appId = payload.data?.appid?.trim();
-  const clientSecret = payload.data?.client_secret?.trim();
-  if (!appId || !clientSecret) {
-    throw new Error('QQ bot creation did not return App ID and Client Secret.');
-  }
-
-  return { appId, clientSecret };
+  return mergeQqCredentials(
+    {
+      appId: payload.data?.appid?.trim(),
+      clientSecret: payload.data?.client_secret?.trim(),
+      developerId: ctx.developerId,
+    },
+    extractQqCredentialsFromPayload(payload),
+  );
 }
 
 async function uploadDefaultAvatar(ctx: QQBotRequestContext): Promise<QQBotUploadAvatarResponse | null> {
@@ -930,7 +1642,18 @@ class QQBotAutoCreateSession extends EventEmitter {
     const requestContext = await captureRequestContext(this.networkSession, developerId);
     const name = normalizeBotName(this.options.appName);
     const desc = normalizeBotDescription(this.options.appDescription);
-    const { appId, clientSecret } = await createQqBot(requestContext);
+    let credentials = await createQqBot(requestContext);
+    if (!hasCompleteQqCredentials(credentials)) {
+      credentials = mergeQqCredentials(
+        await reconcileQqProvisioningResult(this.sessionPartition, name, credentials),
+        credentials,
+      );
+    }
+    if (!hasCompleteQqCredentials(credentials)) {
+      throw new Error('QQ bot creation did not return App ID and Client Secret.');
+    }
+
+    const { appId, clientSecret } = credentials;
     this.publishProgress('creating_bot', 'completed');
     this.publishProgress('saving_credentials', 'running');
 

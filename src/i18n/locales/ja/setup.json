@@ -173,16 +173,16 @@
     },
     "complete": {
         "title": "セットアップ完了！",
-        "subtitle": "TnymaAI による OpenClaw の構成が完了しました。ゲートウェイはバックグラウンドで動作を続け、Control UI を開ける状態です。",
+        "subtitle": "TnymaAI による OpenClaw の構成が完了しました。ゲートウェイはバックグラウンドで動作を続け、同梱された TnymaAI Web ページを開ける状態です。",
         "provider": "AI プロバイダー",
         "components": "コンポーネント",
         "gateway": "ゲートウェイ",
         "running": "実行中",
-        "footer": "「Control UI を開く」を選択すると OpenClaw Control UI を起動します"
+        "footer": "「Control UI を開く」を選択すると同梱された TnymaAI Web ページを起動します"
     },
     "launcher": {
         "title": "OpenClaw の準備ができました",
-        "subtitle": "セットアップは完了しています。ここではセットアップウィザードを再表示せず、Control UI を開く入口だけを表示します。",
+        "subtitle": "セットアップは完了しています。ここではセットアップウィザードを再表示せず、同梱された TnymaAI Web ページを開く入口だけを表示します。",
         "opening": "開いています..."
     },
     "nav": {

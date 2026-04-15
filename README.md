@@ -132,7 +132,7 @@ Light mode, dark mode, or system-synchronized themes. TnymaAI adapts to your pre
 ### 🚀 Startup Launch Control
 In **Settings → General**, you can enable **Launch at system startup** so TnymaAI starts automatically in the background after login.
 When **Gateway auto-start** is still enabled, the background launch restores OpenClaw Gateway automatically without reopening the setup wizard.
-After setup has been completed once, reopening TnymaAI shows a lightweight Control UI launcher instead of the multi-step setup wizard.
+After setup has been completed once, reopening TnymaAI shows a lightweight Control UI launcher that opens the bundled TnymaAI web page instead of the multi-step setup wizard.
 
 ---
 
@@ -354,6 +354,7 @@ pnpm package              # Package for current platform (includes bundled prein
 pnpm package:mac          # Package for macOS
 pnpm package:win          # Package for Windows
 pnpm package:linux        # Package for Linux
+pnpm run cleanup:installed:mac -- --yes  # Remove installed macOS app data, login items, and CLI leftovers
 ```
 
 ### Communication Regression Checks

@@ -457,6 +457,7 @@ exports.default = async function afterPack(context) {
   console.log(`[after-pack] Target: ${platform}/${arch}`);
 
   const src = join(__dirname, '..', 'build', 'openclaw', 'node_modules');
+  const tnymaWebStackSrc = join(__dirname, '..', 'build', 'tnyma-web-stack');
 
   let resourcesDir;
   if (platform === 'darwin') {
@@ -468,6 +469,7 @@ exports.default = async function afterPack(context) {
 
   const openclawRoot = join(resourcesDir, 'openclaw');
   const dest = join(openclawRoot, 'node_modules');
+  const tnymaWebStackDest = join(resourcesDir, 'tnyma-web-stack');
   const nodeModulesRoot = join(__dirname, '..', 'node_modules');
   const pluginsDestRoot = join(resourcesDir, 'openclaw-plugins');
 
@@ -535,4 +537,17 @@ exports.default = async function afterPack(context) {
   if (nativeRemoved > 0) {
     console.log(`[after-pack] ✅ Removed ${nativeRemoved} non-target native platform packages.`);
   }
+
+  if (!existsSync(tnymaWebStackSrc)) {
+    console.warn('[after-pack] ⚠️  build/tnyma-web-stack not found. Run bundle-tnyma-web-stack first.');
+    return;
+  }
+
+  if (existsSync(tnymaWebStackDest)) {
+    rmSync(tnymaWebStackDest, { recursive: true, force: true });
+  }
+
+  console.log(`[after-pack] Copying bundled Tnyma web stack to ${tnymaWebStackDest} ...`);
+  cpSync(tnymaWebStackSrc, tnymaWebStackDest, { recursive: true });
+  console.log('[after-pack] ✅ Bundled Tnyma web stack copied.');
 };

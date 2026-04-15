@@ -15,6 +15,12 @@ export const PORTS = {
 
   /** Local host API server port */
   TNYMA_AI_HOST_API: 3210,
+
+  /** Bundled installer web UI port */
+  TNYMA_AI_WEB: 23000,
+
+  /** Bundled live dashboard gateway port */
+  TNYMA_AI_LIVE_GATEWAY: 43116,
   
   /** OpenClaw Gateway port */
   OPENCLAW_GATEWAY: 18789,

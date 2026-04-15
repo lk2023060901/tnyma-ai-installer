@@ -173,16 +173,16 @@
     },
     "complete": {
         "title": "设置完成！",
-        "subtitle": "TnymaAI 已完成 OpenClaw 配置。网关会继续在后台运行，Control UI 已可打开。",
+        "subtitle": "TnymaAI 已完成 OpenClaw 配置。网关会继续在后台运行，安装器内置的 TnymaAI Web 页面已可打开。",
         "provider": "AI 提供商",
         "components": "组件",
         "gateway": "网关",
         "running": "运行中",
-        "footer": "点击“打开 Control UI”即可进入 OpenClaw Control UI。"
+        "footer": "点击“打开 Control UI”即可进入安装器内置的 TnymaAI Web 页面。"
     },
     "launcher": {
         "title": "OpenClaw 已准备就绪",
-        "subtitle": "配置已完成。这里不再显示安装向导，只保留打开 Control UI 的入口。",
+        "subtitle": "配置已完成。这里不再显示安装向导，只保留打开安装器内置 TnymaAI Web 页面的入口。",
         "opening": "正在打开..."
     },
     "nav": {
