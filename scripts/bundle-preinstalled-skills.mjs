@@ -1,9 +1,8 @@
 #!/usr/bin/env zx
 
 import 'zx/globals';
-import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdirSync, rmSync, cpSync, writeFileSync } from 'node:fs';
-import { join, dirname, basename, delimiter } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 if (process.platform === 'win32' && !$.quote) {
@@ -22,131 +21,6 @@ const ROOT = join(__dirname, '..');
 const MANIFEST_PATH = join(ROOT, 'resources', 'skills', 'preinstalled-manifest.json');
 const OUTPUT_ROOT = join(ROOT, 'build', 'preinstalled-skills');
 const TMP_ROOT = join(ROOT, 'build', '.tmp-preinstalled-skills');
-
-function findWindowsExecutable(names, fallbackPaths = []) {
-  const normalizedNames = names.map((name) => name.toLowerCase().endsWith('.exe') ? name : `${name}.exe`);
-  const candidates = [];
-  const seen = new Set();
-  const isWindowsAppsAlias = (value) => value.toLowerCase().includes(`${join('microsoft', 'windowsapps').toLowerCase()}`);
-  const isUsableExecutable = (candidate) => {
-    if (!existsSync(candidate) || isWindowsAppsAlias(candidate)) {
-      return false;
-    }
-
-    try {
-      execFileSync(candidate, ['--version'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      return true;
-    } catch (error) {
-      const combined = `${error?.stdout || ''}\n${error?.stderr || ''}`;
-      if (/Windows Subsystem for Linux has no installed distributions/i.test(combined)) {
-        return false;
-      }
-      return false;
-    }
-  };
-
-  const pushCandidate = (value) => {
-    if (!value) return;
-    const candidate = String(value).trim().replace(/^"+|"+$/g, '');
-    if (!candidate) return;
-    const key = candidate.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    candidates.push(candidate);
-  };
-
-  for (const fallback of fallbackPaths) {
-    pushCandidate(fallback);
-  }
-
-  for (const entry of (process.env.PATH || '').split(delimiter)) {
-    for (const name of normalizedNames) {
-      pushCandidate(join(entry, name));
-    }
-  }
-
-  for (const name of normalizedNames) {
-    try {
-      const output = execFileSync('where.exe', [name], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      for (const line of output.split(/\r?\n/)) {
-        pushCandidate(line);
-      }
-    } catch {
-      // Ignore lookup failures and continue with PATH/common-location fallbacks.
-    }
-  }
-
-  for (const candidate of candidates) {
-    if (isUsableExecutable(candidate)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    `Unable to resolve ${normalizedNames.join(' or ')}. ` +
-    'Install Git for Windows / bsdtar and ensure the .exe is available on PATH.',
-  );
-}
-
-function runExecutable(command, args, options = {}) {
-  const { cwd } = options;
-  try {
-    return execFileSync(command, args, {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (error) {
-    const combined = `${error?.stdout || ''}\n${error?.stderr || ''}`.trim();
-    throw new Error(combined || error?.message || `Command failed: ${command}`);
-  }
-}
-
-function resolveExecutable(names, fallbackPaths = []) {
-  if (process.platform !== 'win32') {
-    return names[0];
-  }
-  return findWindowsExecutable(names, fallbackPaths);
-}
-
-const WINDOWS_GIT_FALLBACKS = [
-  process.env['ProgramFiles'] ? join(process.env['ProgramFiles'], 'Git', 'cmd', 'git.exe') : '',
-  process.env['ProgramFiles'] ? join(process.env['ProgramFiles'], 'Git', 'bin', 'git.exe') : '',
-  process.env['ProgramFiles(x86)'] ? join(process.env['ProgramFiles(x86)'], 'Git', 'cmd', 'git.exe') : '',
-  process.env['ProgramFiles(x86)'] ? join(process.env['ProgramFiles(x86)'], 'Git', 'bin', 'git.exe') : '',
-  process.env['LocalAppData'] ? join(process.env['LocalAppData'], 'Programs', 'Git', 'cmd', 'git.exe') : '',
-  process.env['LocalAppData'] ? join(process.env['LocalAppData'], 'Programs', 'Git', 'bin', 'git.exe') : '',
-];
-
-const WINDOWS_TAR_FALLBACKS = [
-  process.env.SystemRoot ? join(process.env.SystemRoot, 'System32', 'tar.exe') : '',
-  process.env.SystemRoot ? join(process.env.SystemRoot, 'System32', 'bsdtar.exe') : '',
-  process.env['ProgramFiles'] ? join(process.env['ProgramFiles'], 'Git', 'usr', 'bin', 'tar.exe') : '',
-  process.env['ProgramFiles'] ? join(process.env['ProgramFiles'], 'Git', 'usr', 'bin', 'bsdtar.exe') : '',
-];
-
-const GIT_BIN = resolveExecutable(['git'], WINDOWS_GIT_FALLBACKS);
-const TAR_BIN = resolveExecutable(['tar', 'bsdtar'], WINDOWS_TAR_FALLBACKS);
-const BSDTAR_BIN = process.platform === 'win32'
-  ? (() => {
-      try {
-        return findWindowsExecutable(['bsdtar'], WINDOWS_TAR_FALLBACKS);
-      } catch {
-        return TAR_BIN;
-      }
-    })()
-  : 'bsdtar';
-
-if (process.platform === 'win32') {
-  echo`Using native git executable: ${GIT_BIN}`;
-  echo`Using archive extractor: ${TAR_BIN}`;
-}
 
 function loadManifest() {
   if (!existsSync(MANIFEST_PATH)) {
@@ -198,29 +72,16 @@ function shouldCopySkillFile(srcPath) {
 }
 
 async function extractArchive(archiveFileName, cwd) {
-  if (process.platform === 'win32') {
-    try {
-      runExecutable(TAR_BIN, ['-xf', archiveFileName], { cwd });
-      return;
-    } catch (tarError) {
-      if (BSDTAR_BIN !== TAR_BIN) {
-        runExecutable(BSDTAR_BIN, ['-xf', archiveFileName], { cwd });
-        return;
-      }
-      throw tarError;
-    }
-  }
-
   const prevCwd = $.cwd;
   $.cwd = cwd;
   try {
     try {
-      await $`${TAR_BIN} -xf ${archiveFileName}`;
+      await $`tar -xf ${archiveFileName}`;
       return;
     } catch (tarError) {
-      if (process.platform === 'win32' && BSDTAR_BIN !== TAR_BIN) {
+      if (process.platform === 'win32') {
         // Some Windows images expose bsdtar instead of tar.
-        await $`${BSDTAR_BIN} -xf ${archiveFileName}`;
+        await $`bsdtar -xf ${archiveFileName}`;
         return;
       }
       throw tarError;
@@ -238,28 +99,16 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
   const archivePath = join(checkoutDir, archiveFileName);
   const archivePaths = [...new Set(paths.map(normalizeRepoPath))];
 
-  if (process.platform === 'win32') {
-    runExecutable(GIT_BIN, ['init', gitCheckoutDir]);
-    runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'remote', 'add', 'origin', remote]);
-    runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'fetch', '--depth', '1', 'origin', ref]);
-    runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'archive', '--format=tar', '--output', archiveFileName, 'FETCH_HEAD', ...archivePaths], {
-      cwd: checkoutDir,
-    });
-    await extractArchive(archiveFileName, checkoutDir);
-    rmSync(archivePath, { force: true });
-    return runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'rev-parse', 'FETCH_HEAD']).trim();
-  }
-
-  await $`${GIT_BIN} init ${gitCheckoutDir}`;
-  await $`${GIT_BIN} -C ${gitCheckoutDir} remote add origin ${remote}`;
-  await $`${GIT_BIN} -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
+  await $`git init ${gitCheckoutDir}`;
+  await $`git -C ${gitCheckoutDir} remote add origin ${remote}`;
+  await $`git -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
   // Do not checkout working tree on Windows: upstream repos may contain
   // Windows-invalid paths. Export only requested directories via git archive.
-  await $`${GIT_BIN} -C ${gitCheckoutDir} archive --format=tar --output ${archiveFileName} FETCH_HEAD ${archivePaths}`;
+  await $`git -C ${gitCheckoutDir} archive --format=tar --output ${archiveFileName} FETCH_HEAD ${archivePaths}`;
   await extractArchive(archiveFileName, checkoutDir);
   rmSync(archivePath, { force: true });
 
-  const commit = (await $`${GIT_BIN} -C ${gitCheckoutDir} rev-parse FETCH_HEAD`).stdout.trim();
+  const commit = (await $`git -C ${gitCheckoutDir} rev-parse FETCH_HEAD`).stdout.trim();
   return commit;
 }
 
