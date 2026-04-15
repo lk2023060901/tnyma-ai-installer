@@ -358,6 +358,7 @@ pnpm run cleanup:installed:mac -- --yes  # Remove installed macOS app data, logi
 ```
 
 For installer packaging that bundles the local `tnyma-ai` web stack, set `TNYMA_AI_SOURCE_ROOT` if your source repo lives outside the common auto-detected locations (`../tnyma-ai`, `~/ai/tnyma-ai`, `~/github/tnyma-ai`, `~/Desktop/tnyma-ai`).
+The bundler prefers the source repo's `build:web` script and falls back to `build` when `build:web` is not available.
 
 ### Communication Regression Checks
 

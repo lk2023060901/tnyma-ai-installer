@@ -9,6 +9,7 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
@@ -76,13 +77,33 @@ function ensureSourceRoot() {
   }
 }
 
+function resolveWebBuildScript() {
+  const packageJsonPath = path.join(SOURCE_ROOT, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const scripts = packageJson?.scripts ?? {};
+
+  if (typeof scripts['build:web'] === 'string' && scripts['build:web'].trim()) {
+    return 'build:web';
+  }
+
+  if (typeof scripts.build === 'string' && scripts.build.trim()) {
+    return 'build';
+  }
+
+  throw new Error(
+    `Neither "build:web" nor "build" script exists in ${packageJsonPath}. ` +
+    'Point TNYMA_AI_SOURCE_ROOT at the root of a compatible tnyma-ai repository.',
+  );
+}
+
 function runPnpmBuildWeb() {
+  const buildScript = resolveWebBuildScript();
   const command = process.platform === 'win32'
     ? (process.env.ComSpec || 'cmd.exe')
     : 'pnpm';
   const args = process.platform === 'win32'
-    ? ['/d', '/s', '/c', 'pnpm build:web']
-    : ['build:web'];
+    ? ['/d', '/s', '/c', `pnpm ${buildScript}`]
+    : [buildScript];
   const result = spawnSync(command, args, {
     cwd: SOURCE_ROOT,
     stdio: 'inherit',
@@ -94,7 +115,7 @@ function runPnpmBuildWeb() {
 
   if (result.status !== 0) {
     const failureDetail = result.error?.message || `exit code ${result.status ?? 'unknown'}`;
-    throw new Error(`pnpm build:web failed with ${failureDetail}`);
+    throw new Error(`pnpm ${buildScript} failed with ${failureDetail}`);
   }
 }
 

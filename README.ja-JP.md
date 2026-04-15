@@ -354,6 +354,7 @@ pnpm run cleanup:installed:mac -- --yes  # インストール済み macOS アプ
 ```
 
 インストーラーのパッケージングでローカルの `tnyma-ai` web スタックを同梱する場合、ソースリポジトリが自動検出対象（`../tnyma-ai`、`~/ai/tnyma-ai`、`~/github/tnyma-ai`、`~/Desktop/tnyma-ai`）に無いなら、`TNYMA_AI_SOURCE_ROOT` を明示的に設定してください。
+バンドラはソースリポジトリ内の `build:web` を優先し、存在しない場合は自動的に `build` にフォールバックします。
 
 ### 通信回帰チェック
 

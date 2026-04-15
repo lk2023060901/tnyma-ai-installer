@@ -358,6 +358,7 @@ pnpm run cleanup:installed:mac -- --yes  # 清理已安装的 macOS 应用数据
 ```
 
 如果安装器打包时需要内嵌本地 `tnyma-ai` 的 web 栈，而你的源码仓库不在常见自动发现目录（`../tnyma-ai`、`~/ai/tnyma-ai`、`~/github/tnyma-ai`、`~/Desktop/tnyma-ai`）中，请显式设置 `TNYMA_AI_SOURCE_ROOT`。
+打包脚本会优先执行源码仓库里的 `build:web`，如果没有这个脚本，则自动回退到 `build`。
 
 ### 通信回归检查
 
