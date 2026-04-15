@@ -143,7 +143,6 @@ import {
 } from '@/lib/provider-auth-choices';
 import { CHANNEL_META, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import appIcon from '@/assets/logo.svg';
-import wechatIcon from '@/assets/channels/wechat.svg';
 import feishuIcon from '@/assets/channels/feishu.svg';
 import qqIcon from '@/assets/channels/qq.svg';
 
@@ -178,12 +177,6 @@ const SETUP_MANAGED_CHANNELS: Array<{
   iconClassName?: string;
   hintKey: string;
 }> = [
-  {
-    type: 'wechat',
-    iconSrc: wechatIcon,
-    iconClassName: 'dark:invert',
-    hintKey: 'channels:dialog.wechatAutoHint',
-  },
   {
     type: 'feishu',
     iconSrc: feishuIcon,

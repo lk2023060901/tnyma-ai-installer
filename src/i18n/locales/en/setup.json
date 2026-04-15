@@ -100,7 +100,7 @@
         "title": "Connect a Messaging Channel",
         "subtitle": "Choose a platform to connect your AI assistant to. You can add more channels later in Settings.",
         "selectLabel": "Choose a channel to configure",
-        "selectPlaceholder": "Select WeChat, Feishu, or QQ Bot",
+        "selectPlaceholder": "Select Feishu or QQ Bot",
         "selectHint": "If you do not need a messaging channel yet, continue to the next step and configure it later from Settings.",
         "viewDocs": "View docs",
         "deployMode": "Deployment Mode",

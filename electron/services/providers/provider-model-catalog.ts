@@ -11,6 +11,13 @@ export interface ProviderModelCatalogEntry {
   input?: Array<'text' | 'image' | 'document'>;
 }
 
+const PROVIDER_MODEL_LIST_RETRIES = 6;
+const PROVIDER_MODEL_LIST_DELAY_MS = 700;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function resolveAccountProviderKeys(account: {
   id: string;
   vendorId: string;
@@ -38,22 +45,48 @@ function resolveAccountProviderKeys(account: {
 export async function listProviderModels(
   gatewayManager: GatewayManager,
   accountId: string,
+  options?: {
+    retries?: number;
+    delayMs?: number;
+  },
 ): Promise<ProviderModelCatalogEntry[]> {
   const account = await getProviderAccount(accountId);
   if (!account) {
     throw new Error('Provider account not found');
   }
 
-  const result = await gatewayManager.rpc<{ models?: ProviderModelCatalogEntry[] }>(
-    'models.list',
-    {},
-  );
-  const models = Array.isArray(result?.models) ? result.models : [];
   const providerKeys = new Set(resolveAccountProviderKeys(account));
+  const retries = Math.max(1, options?.retries ?? PROVIDER_MODEL_LIST_RETRIES);
+  const delayMs = Math.max(0, options?.delayMs ?? PROVIDER_MODEL_LIST_DELAY_MS);
 
-  const filtered = models.filter((entry) => providerKeys.has(entry.provider));
-  filtered.sort((left, right) =>
-    left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) || left.id.localeCompare(right.id),
-  );
-  return filtered;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      const result = await gatewayManager.rpc<{ models?: ProviderModelCatalogEntry[] }>(
+        'models.list',
+        {},
+      );
+      const models = Array.isArray(result?.models) ? result.models : [];
+      const filtered = models.filter((entry) => providerKeys.has(entry.provider));
+
+      if (filtered.length > 0 || attempt === retries - 1) {
+        filtered.sort((left, right) =>
+          left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) || left.id.localeCompare(right.id),
+        );
+        return filtered;
+      }
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries - 1) {
+        throw error;
+      }
+    }
+
+    await delay(delayMs);
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+  return [];
 }
