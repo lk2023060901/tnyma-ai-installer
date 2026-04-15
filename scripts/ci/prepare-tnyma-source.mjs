@@ -12,6 +12,7 @@ const REQUESTED_SOURCE_ROOT = process.env.TNYMA_AI_SOURCE_ROOT?.trim();
 const SOURCE_ROOT = path.resolve(REQUESTED_SOURCE_ROOT || DEFAULT_CHECKOUT_DIR);
 const CHECKOUT_DIR = path.resolve(process.env.TNYMA_AI_CHECKOUT_DIR?.trim() || SOURCE_ROOT);
 const GIT_URL = process.env.TNYMA_AI_GIT_URL?.trim() || '';
+const INTERNAL_GIT_URL = process.env.TNYMA_AI_GIT_URL_INTERNAL?.trim() || '';
 const REF = process.env.TNYMA_AI_REF?.trim() || 'main';
 const METADATA_PATH = path.resolve(process.env.TNYMA_AI_METADATA_PATH?.trim() || path.join(ROOT, '.ci', 'tnyma-ai-source.json'));
 
@@ -66,15 +67,41 @@ function resolveRevision(targetPath) {
   return run('git', ['-C', targetPath, 'rev-parse', 'HEAD'], { capture: true });
 }
 
+function resolveGitUrlCandidates() {
+  const candidates = [];
+  const seen = new Set();
+  const runnerTags = (process.env.CI_RUNNER_TAGS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  function addCandidate(url) {
+    if (!url || seen.has(url)) {
+      return;
+    }
+    seen.add(url);
+    candidates.push(url);
+  }
+
+  if (runnerTags.includes('docker')) {
+    addCandidate(INTERNAL_GIT_URL);
+  }
+
+  addCandidate(GIT_URL);
+  return candidates;
+}
+
 function ensureCheckout() {
   if (existsSync(path.join(SOURCE_ROOT, 'package.json'))) {
     return SOURCE_ROOT;
   }
 
-  if (!GIT_URL) {
+  const gitUrlCandidates = resolveGitUrlCandidates();
+
+  if (gitUrlCandidates.length === 0) {
     throw new Error(
       `Tnyma AI source root does not exist: ${SOURCE_ROOT}. ` +
-      'Set TNYMA_AI_SOURCE_ROOT to an existing checkout or set TNYMA_AI_GIT_URL so CI can clone it.',
+      'Set TNYMA_AI_SOURCE_ROOT to an existing checkout or set TNYMA_AI_GIT_URL/TNYMA_AI_GIT_URL_INTERNAL so CI can clone it.',
     );
   }
 
@@ -84,14 +111,37 @@ function ensureCheckout() {
     if (existsSync(CHECKOUT_DIR) && isDirectory(CHECKOUT_DIR)) {
       throw new Error(`Checkout directory exists but is not a git repo: ${CHECKOUT_DIR}`);
     }
-    run('git', ['clone', '--no-checkout', GIT_URL, CHECKOUT_DIR]);
+
+    let lastError = null;
+    for (const gitUrl of gitUrlCandidates) {
+      try {
+        run('git', ['clone', '--no-checkout', gitUrl, CHECKOUT_DIR]);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
   }
 
-  run('git', ['-C', CHECKOUT_DIR, 'fetch', '--depth', '1', 'origin', REF]);
-  run('git', ['-C', CHECKOUT_DIR, 'checkout', '--force', 'FETCH_HEAD']);
-  run('git', ['-C', CHECKOUT_DIR, 'clean', '-fdx']);
+  let lastError = null;
+  for (const gitUrl of gitUrlCandidates) {
+    try {
+      run('git', ['-C', CHECKOUT_DIR, 'remote', 'set-url', 'origin', gitUrl]);
+      run('git', ['-C', CHECKOUT_DIR, 'fetch', '--depth', '1', 'origin', REF]);
+      run('git', ['-C', CHECKOUT_DIR, 'checkout', '--force', 'FETCH_HEAD']);
+      run('git', ['-C', CHECKOUT_DIR, 'clean', '-fdx']);
+      return CHECKOUT_DIR;
+    } catch (error) {
+      lastError = error;
+    }
+  }
 
-  return CHECKOUT_DIR;
+  throw lastError;
 }
 
 const effectiveSourceRoot = ensureCheckout();
