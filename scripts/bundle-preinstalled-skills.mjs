@@ -27,6 +27,26 @@ function findWindowsExecutable(names, fallbackPaths = []) {
   const normalizedNames = names.map((name) => name.toLowerCase().endsWith('.exe') ? name : `${name}.exe`);
   const candidates = [];
   const seen = new Set();
+  const isWindowsAppsAlias = (value) => value.toLowerCase().includes(`${join('microsoft', 'windowsapps').toLowerCase()}`);
+  const isUsableExecutable = (candidate) => {
+    if (!existsSync(candidate) || isWindowsAppsAlias(candidate)) {
+      return false;
+    }
+
+    try {
+      execFileSync(candidate, ['--version'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return true;
+    } catch (error) {
+      const combined = `${error?.stdout || ''}\n${error?.stderr || ''}`;
+      if (/Windows Subsystem for Linux has no installed distributions/i.test(combined)) {
+        return false;
+      }
+      return false;
+    }
+  };
 
   const pushCandidate = (value) => {
     if (!value) return;
@@ -37,6 +57,16 @@ function findWindowsExecutable(names, fallbackPaths = []) {
     seen.add(key);
     candidates.push(candidate);
   };
+
+  for (const fallback of fallbackPaths) {
+    pushCandidate(fallback);
+  }
+
+  for (const entry of (process.env.PATH || '').split(delimiter)) {
+    for (const name of normalizedNames) {
+      pushCandidate(join(entry, name));
+    }
+  }
 
   for (const name of normalizedNames) {
     try {
@@ -52,18 +82,8 @@ function findWindowsExecutable(names, fallbackPaths = []) {
     }
   }
 
-  for (const entry of (process.env.PATH || '').split(delimiter)) {
-    for (const name of normalizedNames) {
-      pushCandidate(join(entry, name));
-    }
-  }
-
-  for (const fallback of fallbackPaths) {
-    pushCandidate(fallback);
-  }
-
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
+    if (isUsableExecutable(candidate)) {
       return candidate;
     }
   }
@@ -108,6 +128,11 @@ const BSDTAR_BIN = process.platform === 'win32'
       }
     })()
   : 'bsdtar';
+
+if (process.platform === 'win32') {
+  echo`Using native git executable: ${GIT_BIN}`;
+  echo`Using archive extractor: ${TAR_BIN}`;
+}
 
 function loadManifest() {
   if (!existsSync(MANIFEST_PATH)) {
