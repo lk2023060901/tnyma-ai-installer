@@ -16,18 +16,34 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
 
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_ROOT = path.join(ROOT, 'build', 'tnyma-web-stack');
-const DEFAULT_SOURCE_ROOT = path.resolve(ROOT, '..', '..', 'ai', 'tnyma-ai');
-const SOURCE_ROOT = path.resolve(process.env.TNYMA_AI_SOURCE_ROOT?.trim() || DEFAULT_SOURCE_ROOT);
+const HOME_DIR = os.homedir();
 
-const WEB_SOURCE_ROOT = path.join(SOURCE_ROOT, 'apps', 'web');
-const WEB_STANDALONE_ROOT = path.join(WEB_SOURCE_ROOT, '.next', 'standalone');
-const WEB_STATIC_ROOT = path.join(WEB_SOURCE_ROOT, '.next', 'static');
-const WEB_PUBLIC_ROOT = path.join(WEB_SOURCE_ROOT, 'public');
+function resolveSourceRoot() {
+  const envSourceRoot = process.env.TNYMA_AI_SOURCE_ROOT?.trim();
+  const candidates = [
+    envSourceRoot,
+    path.resolve(ROOT, '..', '..', 'ai', 'tnyma-ai'),
+    path.resolve(ROOT, '..', 'tnyma-ai'),
+    path.join(HOME_DIR, 'ai', 'tnyma-ai'),
+    path.join(HOME_DIR, 'github', 'tnyma-ai'),
+    path.join(HOME_DIR, 'Desktop', 'tnyma-ai'),
+  ].filter(Boolean).map((candidate) => path.resolve(candidate));
+
+  return candidates.find((candidate) => existsSync(path.join(candidate, 'package.json')));
+}
+
+const SOURCE_ROOT = resolveSourceRoot();
+
+const WEB_SOURCE_ROOT = SOURCE_ROOT ? path.join(SOURCE_ROOT, 'apps', 'web') : null;
+const WEB_STANDALONE_ROOT = WEB_SOURCE_ROOT ? path.join(WEB_SOURCE_ROOT, '.next', 'standalone') : null;
+const WEB_STATIC_ROOT = WEB_SOURCE_ROOT ? path.join(WEB_SOURCE_ROOT, '.next', 'static') : null;
+const WEB_PUBLIC_ROOT = WEB_SOURCE_ROOT ? path.join(WEB_SOURCE_ROOT, 'public') : null;
 
 const WEB_OUTPUT_ROOT = path.join(OUTPUT_ROOT, 'web');
 const LIVE_GATEWAY_OUTPUT_ROOT = path.join(OUTPUT_ROOT, 'live-gateway');
@@ -37,6 +53,24 @@ const RUNTIME_NODE_MODULES_ROOT = path.join(OUTPUT_ROOT, 'node_modules');
 function ensureExists(targetPath, description) {
   if (!existsSync(targetPath)) {
     throw new Error(`${description} not found: ${targetPath}`);
+  }
+}
+
+function ensureSourceRoot() {
+  if (!SOURCE_ROOT) {
+    const expectedPaths = [
+      process.env.TNYMA_AI_SOURCE_ROOT?.trim() ? `TNYMA_AI_SOURCE_ROOT=${process.env.TNYMA_AI_SOURCE_ROOT.trim()}` : null,
+      path.resolve(ROOT, '..', '..', 'ai', 'tnyma-ai'),
+      path.resolve(ROOT, '..', 'tnyma-ai'),
+      path.join(HOME_DIR, 'ai', 'tnyma-ai'),
+      path.join(HOME_DIR, 'github', 'tnyma-ai'),
+      path.join(HOME_DIR, 'Desktop', 'tnyma-ai'),
+    ].filter(Boolean);
+
+    throw new Error(
+      'Tnyma AI source repository not found. ' +
+      `Set TNYMA_AI_SOURCE_ROOT or place the repo in one of: ${expectedPaths.join(', ')}`,
+    );
   }
 }
 
@@ -231,6 +265,7 @@ function writeManifest() {
 }
 
 echo`📦 Bundling Tnyma local web stack...`;
+ensureSourceRoot();
 ensureExists(SOURCE_ROOT, 'Tnyma AI source repository');
 ensureExists(path.join(SOURCE_ROOT, 'package.json'), 'Tnyma AI package.json');
 ensureExists(path.join(SOURCE_ROOT, 'node_modules'), 'Tnyma AI node_modules');

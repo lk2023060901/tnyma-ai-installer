@@ -357,6 +357,8 @@ pnpm package:linux        # 为 Linux 打包
 pnpm run cleanup:installed:mac -- --yes  # 清理已安装的 macOS 应用数据、登录项和 CLI 残留
 ```
 
+如果安装器打包时需要内嵌本地 `tnyma-ai` 的 web 栈，而你的源码仓库不在常见自动发现目录（`../tnyma-ai`、`~/ai/tnyma-ai`、`~/github/tnyma-ai`、`~/Desktop/tnyma-ai`）中，请显式设置 `TNYMA_AI_SOURCE_ROOT`。
+
 ### 通信回归检查
 
 当 PR 涉及通信链路（Gateway 事件、Chat 收发流程、Channel 投递、传输回退）时，建议执行：

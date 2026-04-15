@@ -357,6 +357,8 @@ pnpm package:linux        # Package for Linux
 pnpm run cleanup:installed:mac -- --yes  # Remove installed macOS app data, login items, and CLI leftovers
 ```
 
+For installer packaging that bundles the local `tnyma-ai` web stack, set `TNYMA_AI_SOURCE_ROOT` if your source repo lives outside the common auto-detected locations (`../tnyma-ai`, `~/ai/tnyma-ai`, `~/github/tnyma-ai`, `~/Desktop/tnyma-ai`).
+
 ### Communication Regression Checks
 
 When a PR changes communication paths (gateway events, chat runtime send/receive flow, channel delivery, or transport fallback), run:

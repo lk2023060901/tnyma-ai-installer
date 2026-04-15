@@ -353,6 +353,8 @@ pnpm package:linux        # Linux向けにパッケージ化
 pnpm run cleanup:installed:mac -- --yes  # インストール済み macOS アプリデータ、ログイン項目、CLI 残留を削除
 ```
 
+インストーラーのパッケージングでローカルの `tnyma-ai` web スタックを同梱する場合、ソースリポジトリが自動検出対象（`../tnyma-ai`、`~/ai/tnyma-ai`、`~/github/tnyma-ai`、`~/Desktop/tnyma-ai`）に無いなら、`TNYMA_AI_SOURCE_ROOT` を明示的に設定してください。
+
 ### 通信回帰チェック
 
 PR が通信経路（Gateway イベント、Chat 送受信フロー、Channel 配信、トランスポートのフォールバック）に触れる場合は、次を実行してください。
