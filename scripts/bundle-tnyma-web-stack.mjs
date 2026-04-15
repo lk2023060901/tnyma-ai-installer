@@ -18,8 +18,10 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_ROOT = path.join(ROOT, 'build', 'tnyma-web-stack');
 const HOME_DIR = os.homedir();
