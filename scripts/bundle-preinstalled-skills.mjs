@@ -94,6 +94,20 @@ function findWindowsExecutable(names, fallbackPaths = []) {
   );
 }
 
+function runExecutable(command, args, options = {}) {
+  const { cwd } = options;
+  try {
+    return execFileSync(command, args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const combined = `${error?.stdout || ''}\n${error?.stderr || ''}`.trim();
+    throw new Error(combined || error?.message || `Command failed: ${command}`);
+  }
+}
+
 function resolveExecutable(names, fallbackPaths = []) {
   if (process.platform !== 'win32') {
     return names[0];
@@ -184,6 +198,19 @@ function shouldCopySkillFile(srcPath) {
 }
 
 async function extractArchive(archiveFileName, cwd) {
+  if (process.platform === 'win32') {
+    try {
+      runExecutable(TAR_BIN, ['-xf', archiveFileName], { cwd });
+      return;
+    } catch (tarError) {
+      if (BSDTAR_BIN !== TAR_BIN) {
+        runExecutable(BSDTAR_BIN, ['-xf', archiveFileName], { cwd });
+        return;
+      }
+      throw tarError;
+    }
+  }
+
   const prevCwd = $.cwd;
   $.cwd = cwd;
   try {
@@ -210,6 +237,18 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
   const archiveFileName = '.subset.tar';
   const archivePath = join(checkoutDir, archiveFileName);
   const archivePaths = [...new Set(paths.map(normalizeRepoPath))];
+
+  if (process.platform === 'win32') {
+    runExecutable(GIT_BIN, ['init', gitCheckoutDir]);
+    runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'remote', 'add', 'origin', remote]);
+    runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'fetch', '--depth', '1', 'origin', ref]);
+    runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'archive', '--format=tar', '--output', archiveFileName, 'FETCH_HEAD', ...archivePaths], {
+      cwd: checkoutDir,
+    });
+    await extractArchive(archiveFileName, checkoutDir);
+    rmSync(archivePath, { force: true });
+    return runExecutable(GIT_BIN, ['-C', gitCheckoutDir, 'rev-parse', 'FETCH_HEAD']).trim();
+  }
 
   await $`${GIT_BIN} init ${gitCheckoutDir}`;
   await $`${GIT_BIN} -C ${gitCheckoutDir} remote add origin ${remote}`;
