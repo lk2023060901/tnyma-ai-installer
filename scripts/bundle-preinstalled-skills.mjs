@@ -1,7 +1,7 @@
 #!/usr/bin/env zx
 
 import 'zx/globals';
-import { readFileSync, existsSync, mkdirSync, rmSync, cpSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -75,13 +75,16 @@ async function extractArchive(archiveFileName, cwd) {
   const prevCwd = $.cwd;
   $.cwd = cwd;
   try {
+    const extractArgs = archiveFileName.endsWith('.tar.gz') || archiveFileName.endsWith('.tgz')
+      ? ['-xzf', archiveFileName]
+      : ['-xf', archiveFileName];
     try {
-      await $`tar -xf ${archiveFileName}`;
+      await $`tar ${extractArgs}`;
       return;
     } catch (tarError) {
       if (process.platform === 'win32') {
         // Some Windows images expose bsdtar instead of tar.
-        await $`bsdtar -xf ${archiveFileName}`;
+        await $`bsdtar ${extractArgs}`;
         return;
       }
       throw tarError;
@@ -89,6 +92,55 @@ async function extractArchive(archiveFileName, cwd) {
   } finally {
     $.cwd = prevCwd;
   }
+}
+
+async function resolveGitHubCommit(repo, ref) {
+  const response = await fetch(`https://api.github.com/repos/${repo}/commits/${encodeURIComponent(ref)}`, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': 'tnyma-ai-installer',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub commit lookup failed (${response.status} ${response.statusText})`);
+  }
+
+  const payload = await response.json();
+  if (!payload?.sha) {
+    throw new Error(`GitHub commit lookup for ${repo}@${ref} returned no sha`);
+  }
+
+  return payload.sha;
+}
+
+async function downloadRepoArchive(repo, ref, checkoutDir) {
+  const archiveFileName = '.subset.tar.gz';
+  const archivePath = join(checkoutDir, archiveFileName);
+  const response = await fetch(`https://github.com/${repo}/archive/${encodeURIComponent(ref)}.tar.gz`, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': 'tnyma-ai-installer',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub archive download failed (${response.status} ${response.statusText})`);
+  }
+
+  const archiveBuffer = Buffer.from(await response.arrayBuffer());
+  writeFileSync(archivePath, archiveBuffer);
+  await extractArchive(archiveFileName, checkoutDir);
+  rmSync(archivePath, { force: true });
+
+  const extractedRoot = readdirSync(checkoutDir, { withFileTypes: true })
+    .find((entry) => entry.isDirectory() && entry.name !== '.git');
+
+  if (!extractedRoot) {
+    throw new Error(`Archive extraction for ${repo}@${ref} produced no root directory`);
+  }
+
+  return join(checkoutDir, extractedRoot.name);
 }
 
 async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
@@ -99,17 +151,33 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
   const archivePath = join(checkoutDir, archiveFileName);
   const archivePaths = [...new Set(paths.map(normalizeRepoPath))];
 
-  await $`git init ${gitCheckoutDir}`;
-  await $`git -C ${gitCheckoutDir} remote add origin ${remote}`;
-  await $`git -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
-  // Do not checkout working tree on Windows: upstream repos may contain
-  // Windows-invalid paths. Export only requested directories via git archive.
-  await $`git -C ${gitCheckoutDir} archive --format=tar --output ${archiveFileName} FETCH_HEAD ${archivePaths}`;
-  await extractArchive(archiveFileName, checkoutDir);
-  rmSync(archivePath, { force: true });
+  try {
+    await $`git init ${gitCheckoutDir}`;
+    await $`git -C ${gitCheckoutDir} remote add origin ${remote}`;
+    await $`git -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
+    // Do not checkout working tree on Windows: upstream repos may contain
+    // Windows-invalid paths. Export only requested directories via git archive.
+    await $`git -C ${gitCheckoutDir} archive --format=tar --output ${archiveFileName} FETCH_HEAD ${archivePaths}`;
+    await extractArchive(archiveFileName, checkoutDir);
+    rmSync(archivePath, { force: true });
 
-  const commit = (await $`git -C ${gitCheckoutDir} rev-parse FETCH_HEAD`).stdout.trim();
-  return commit;
+    const commit = (await $`git -C ${gitCheckoutDir} rev-parse FETCH_HEAD`).stdout.trim();
+    return { commit, rootDir: checkoutDir };
+  } catch (error) {
+    if (process.platform !== 'win32') {
+      throw error;
+    }
+
+    echo`   git fetch failed, falling back to GitHub archive download`;
+    rmSync(join(checkoutDir, '.git'), { recursive: true, force: true });
+
+    const [commit, rootDir] = await Promise.all([
+      resolveGitHubCommit(repo, ref).catch(() => ref),
+      downloadRepoArchive(repo, ref, checkoutDir),
+    ]);
+
+    return { commit, rootDir };
+  }
 }
 
 echo`Bundling preinstalled skills...`;
@@ -137,11 +205,11 @@ for (const group of groups) {
   const sparsePaths = [...new Set(group.entries.map((entry) => entry.repoPath))];
 
   echo`Fetching ${group.repo} @ ${group.ref}`;
-  const commit = await fetchSparseRepo(group.repo, group.ref, sparsePaths, repoDir);
+  const { commit, rootDir } = await fetchSparseRepo(group.repo, group.ref, sparsePaths, repoDir);
   echo`   commit ${commit}`;
 
   for (const entry of group.entries) {
-    const sourceDir = join(repoDir, entry.repoPath);
+    const sourceDir = join(rootDir, entry.repoPath);
     const targetDir = join(OUTPUT_ROOT, entry.slug);
 
     if (!existsSync(sourceDir)) {
