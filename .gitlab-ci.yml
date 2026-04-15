@@ -23,10 +23,19 @@ variables:
 
 .setup_posix:
   before_script:
+    - export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+    - |
+      if ! command -v corepack >/dev/null 2>&1; then
+        NVM_NODE_BIN="$(find "$HOME/.nvm/versions/node" -maxdepth 3 -type f -name node 2>/dev/null | sort | tail -n 1)"
+        if [ -n "$NVM_NODE_BIN" ]; then
+          export PATH="$(dirname "$NVM_NODE_BIN"):$PATH"
+        fi
+      fi
+    - command -v node
+    - command -v corepack
     - corepack enable
     - corepack prepare pnpm@10.31.0 --activate
     - pnpm install --frozen-lockfile
-    - node scripts/ci/verify-openclaw-version.mjs
     - export TNYMA_AI_SOURCE_ROOT="${TNYMA_AI_SOURCE_ROOT:-$TNYMA_AI_CHECKOUT_DIR}"
     - node scripts/ci/prepare-tnyma-source.mjs
 
@@ -35,7 +44,6 @@ variables:
     - corepack enable
     - corepack prepare pnpm@10.31.0 --activate
     - pnpm install --frozen-lockfile
-    - node scripts/ci/verify-openclaw-version.mjs
     - if (-not $env:TNYMA_AI_SOURCE_ROOT) { $env:TNYMA_AI_SOURCE_ROOT = $env:TNYMA_AI_CHECKOUT_DIR }
     - node scripts/ci/prepare-tnyma-source.mjs
 
@@ -45,6 +53,7 @@ verify:installer:
   tags:
     - docker
   script:
+    - node scripts/ci/verify-openclaw-version.mjs
     - pnpm run typecheck
     - pnpm test
 
@@ -54,6 +63,7 @@ bundle:services:
   tags:
     - docker
   script:
+    - node scripts/ci/verify-openclaw-version.mjs
     - pnpm run bundle:tnyma-web-stack
     - node scripts/write-build-metadata.mjs
   rules:

@@ -27,6 +27,7 @@
         }
     },
     "description": "TnymaAI - Graphical AI Assistant",
+    "homepage": "https://github.com/lk2023060901/tnyma-ai-installer",
     "main": "dist-electron/main/index.js",
     "author": "TnymaAI Team",
     "license": "MIT",
