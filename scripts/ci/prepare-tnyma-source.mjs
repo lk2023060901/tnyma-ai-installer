@@ -67,6 +67,26 @@ function resolveRevision(targetPath) {
   return run('git', ['-C', targetPath, 'rev-parse', 'HEAD'], { capture: true });
 }
 
+function ensureDependenciesInstalled(targetPath) {
+  if (existsSync(path.join(targetPath, 'node_modules'))) {
+    return;
+  }
+
+  const command = process.platform === 'win32'
+    ? (process.env.ComSpec || 'cmd.exe')
+    : 'pnpm';
+  const args = process.platform === 'win32'
+    ? ['/d', '/s', '/c', 'pnpm install --frozen-lockfile']
+    : ['install', '--frozen-lockfile'];
+
+  run(command, args, {
+    cwd: targetPath,
+    env: {
+      NEXT_TELEMETRY_DISABLED: '1',
+    },
+  });
+}
+
 function resolveGitUrlCandidates() {
   const candidates = [];
   const seen = new Set();
@@ -146,6 +166,7 @@ function ensureCheckout() {
 
 const effectiveSourceRoot = ensureCheckout();
 const packageJson = validateSourceRoot(effectiveSourceRoot);
+ensureDependenciesInstalled(effectiveSourceRoot);
 const resolvedRef = resolveRevision(effectiveSourceRoot);
 
 mkdirSync(path.dirname(METADATA_PATH), { recursive: true });
