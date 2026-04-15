@@ -1,0 +1,52 @@
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:17.10.5-ce.0
+    platform: linux/amd64
+    container_name: local-gitlab
+    hostname: ${GITLAB_HOSTNAME:-gitlab.local}
+    restart: unless-stopped
+    shm_size: 512m
+    ports:
+      - "${GITLAB_HTTP_PORT:-8929}:8929"
+      - "${GITLAB_SSH_PORT:-2224}:22"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://${GITLAB_HOSTNAME:-gitlab.local}:${GITLAB_HTTP_PORT:-8929}'
+        nginx['listen_port'] = ${GITLAB_HTTP_PORT:-8929}
+        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_PORT:-2224}
+        gitlab_rails['initial_root_email'] = '${GITLAB_ROOT_EMAIL:-root@example.com}'
+        gitlab_rails['initial_root_password'] = '${GITLAB_ROOT_PASSWORD:-change-me-now}'
+        alertmanager['enable'] = false
+        gitlab_exporter['enable'] = false
+        gitlab_kas['enable'] = false
+        node_exporter['enable'] = false
+        postgres_exporter['enable'] = false
+        prometheus_monitoring['enable'] = false
+        prometheus['enable'] = false
+        puma['worker_processes'] = 0
+        puma['exporter_enabled'] = false
+        sidekiq['concurrency'] = 10
+        sidekiq['metrics_enabled'] = false
+        gitlab_rails['env'] = {
+          'MALLOC_CONF' => 'dirty_decay_ms:1000,muzzy_decay_ms:1000'
+        }
+        gitaly['env'] = {
+          'MALLOC_CONF' => 'dirty_decay_ms:1000,muzzy_decay_ms:1000',
+          'GITALY_COMMAND_SPAWN_MAX_PARALLEL' => '2'
+        }
+    volumes:
+      - ${GITLAB_HOME:-./.volumes}/config:/etc/gitlab
+      - ${GITLAB_HOME:-./.volumes}/logs:/var/log/gitlab
+      - ${GITLAB_HOME:-./.volumes}/data:/var/opt/gitlab
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:alpine
+    container_name: local-gitlab-runner
+    restart: unless-stopped
+    profiles:
+      - docker-runner
+    depends_on:
+      - gitlab
+    volumes:
+      - ${GITLAB_HOME:-./.volumes}/runner:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock

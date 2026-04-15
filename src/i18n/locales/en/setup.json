@@ -26,12 +26,12 @@
         },
         "complete": {
             "title": "All Set!",
-            "description": "OpenClaw is configured and ready to open"
+            "description": "TnymaAI is configured and ready to open"
         }
     },
     "welcome": {
         "title": "Welcome to TnymaAI",
-        "description": "TnymaAI is a graphical interface for OpenClaw, making it easy to use AI assistants across your favorite messaging platforms.",
+        "description": "TnymaAI is a graphical interface that makes it easy to use AI assistants across your favorite messaging platforms.",
         "features": {
             "noCommand": "Zero command-line required",
             "modernUI": "Modern, beautiful interface",
@@ -44,7 +44,7 @@
         "viewLogs": "View Logs",
         "recheck": "Re-check",
         "nodejs": "Node.js Runtime",
-        "openclaw": "OpenClaw Package",
+        "openclaw": "TnymaAI Package",
         "gateway": "Gateway Service",
         "startGateway": "Start Gateway",
         "status": {
@@ -52,11 +52,11 @@
             "success": "Node.js is available",
             "error": "Failed",
             "gatewayRunning": "Running on port {{port}}",
-            "packageReady": "OpenClaw package ready"
+            "packageReady": "TnymaAI package ready"
         },
         "issue": {
             "title": "Environment issue detected",
-            "desc": "Please ensure OpenClaw is properly installed. Check the logs for details."
+            "desc": "Please ensure TnymaAI is properly installed. Check the logs for details."
         },
         "logs": {
             "title": "Application Logs",
@@ -173,7 +173,7 @@
     },
     "complete": {
         "title": "Setup Complete!",
-        "subtitle": "TnymaAI has finished configuring OpenClaw. The gateway will keep running in the background and the bundled TnymaAI web page is ready to open.",
+        "subtitle": "TnymaAI has finished configuring the bundled runtime. The gateway will keep running in the background and the bundled TnymaAI web page is ready to open.",
         "provider": "AI Provider",
         "components": "Components",
         "gateway": "Gateway",
@@ -181,7 +181,7 @@
         "footer": "Select Open Control UI to launch the bundled TnymaAI web page."
     },
     "launcher": {
-        "title": "OpenClaw Is Ready",
+        "title": "TnymaAI Is Ready",
         "subtitle": "Setup is complete. The setup wizard stays hidden now and this window only opens the bundled TnymaAI web page.",
         "opening": "Opening..."
     },

@@ -292,7 +292,7 @@ jobs:
           body: |
             ## 🚀 TnymaAI ${{ github.ref_name }}
             
-            TnymaAI - Graphical AI Assistant based on OpenClaw
+            TnymaAI - Graphical AI Assistant with bundled runtime
             
             ### 📦 Downloads
             

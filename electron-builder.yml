@@ -22,14 +22,16 @@ extraResources:
       - "!icons/*.svg"
       - "!bin/**"
       - "!screenshot/**"
-  # OpenClaw package (node_modules copied separately by afterPack hook
+  # TnymaAI package (node_modules copied separately by afterPack hook
   # because electron-builder respects .gitignore which excludes node_modules/)
   - from: build/openclaw/
     to: openclaw/
   # Pre-bundled third-party skills (full directories, not only SKILL.md)
   - from: build/preinstalled-skills/
     to: resources/preinstalled-skills/
-  # NOTE: OpenClaw plugin mirrors (dingtalk, etc.) are bundled by the
+  - from: build/build-metadata.json
+    to: resources/build-metadata.json
+  # NOTE: TnymaAI plugin mirrors (dingtalk, etc.) are bundled by the
   # afterPack hook (after-pack.cjs) directly from node_modules, so they
   # don't need an extraResources entry here.
 
@@ -41,7 +43,7 @@ asarUnpack:
 
 # Disable native module rebuilding.
 # The Electron renderer/main process has no native (.node) dependencies.
-# All native modules (opus, sharp, koffi …) belong to openclaw, which is
+# All native modules (opus, sharp, koffi …) belong to TnymaAI, which is
 # bundled separately (bundle-openclaw.mjs → extraResources) and runs in its
 # own process — @electron/rebuild must NOT touch them.
 npmRebuild: false
@@ -161,12 +163,12 @@ linux:
   category: Utility
   maintainer: TnymaAI Team <public@valuecell.ai>
   vendor: TnymaAI
-  synopsis: AI Assistant powered by OpenClaw
-  description: TnymaAI is a graphical AI assistant application that integrates with OpenClaw Gateway to provide intelligent automation and assistance across multiple messaging platforms.
+  synopsis: AI Assistant powered by TnymaAI
+  description: TnymaAI is a graphical AI assistant application that integrates with TnymaAI Gateway to provide intelligent automation and assistance across multiple messaging platforms.
   desktop:
     entry:
       Name: TnymaAI
-      Comment: AI Assistant powered by OpenClaw
+      Comment: AI Assistant powered by TnymaAI
       Categories: Utility;Network;
       Keywords: ai;assistant;automation;chat;
       StartupWMClass: tnyma-ai

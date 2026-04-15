@@ -247,7 +247,7 @@ export function Settings() {
           setOpenclawCliError(null);
         } else {
           setOpenclawCliCommand('');
-          setOpenclawCliError(result.error || 'OpenClaw CLI unavailable');
+          setOpenclawCliError(result.error || 'CLI unavailable');
         }
       } catch (error) {
         if (cancelled) return;
@@ -274,7 +274,7 @@ export function Settings() {
       'openclaw:cli-installed',
       (...args: unknown[]) => {
         const installedPath = typeof args[0] === 'string' ? args[0] : '';
-        toast.success(`openclaw CLI installed at ${installedPath}`);
+        toast.success(`CLI installed at ${installedPath}`);
       },
     );
     return () => { unsubscribe?.(); };

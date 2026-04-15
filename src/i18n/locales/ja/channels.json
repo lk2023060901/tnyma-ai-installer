@@ -175,17 +175,17 @@
             ]
         },
         "wechat": {
-            "description": "Tencent 公式の OpenClaw プラグインを使い、QRコードをスキャンして個人 WeChat に接続します",
+            "description": "Tencent 公式の TnymaAI プラグインを使い、QRコードをスキャンして個人 WeChat に接続します",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/GHYZwuPCriF0gWkXwkFcJ9zon3b",
             "instructions": [
-                "QRコードを生成すると、TnymaAI が OpenClaw に公式 WeChat プラグインをインストールして有効化します",
+                "QRコードを生成すると、TnymaAI が TnymaAI に公式 WeChat プラグインをインストールして有効化します",
                 "以下の QR コードを WeChat でスキャンし、スマートフォン側で接続を確認します",
                 "接続が完了すると、WeChat に新しい「WeChat ClawBot」チャットが自動で表示されます",
                 "後から同じ QR フローを使って、別の WeChat アカウントを追加したり既存アカウントを再接続したりできます"
             ]
         },
         "dingtalk": {
-            "description": "OpenClaw のチャンネルプラグイン経由で DingTalk に接続します（Stream モード）",
+            "description": "TnymaAI のチャンネルプラグイン経由で DingTalk に接続します（Stream モード）",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/Y5eNwiSiZidkLskrwtJc1rUln0b#doxcnDgA78n43DbkiQjI1OqUA7b",
             "fields": {
                 "clientId": {
@@ -210,7 +210,7 @@
                 }
             },
             "instructions": [
-                "まず OpenClaw に dingtalk プラグインをインストールして有効化します",
+                "まず TnymaAI に dingtalk プラグインをインストールして有効化します",
                 "DingTalk 開発者コンソールで社内アプリを作成し Stream モードを有効にします",
                 "Client ID と Client Secret を入力します（必須）",
                 "必要に応じて Robot Code / Corp ID / Agent ID を入力します"
@@ -406,7 +406,7 @@
                 }
             },
             "autoInstructions": [
-                "下のボタンを押すと、TnymaAI が QQ 公式 OpenClaw ログインページを開きます",
+                "下のボタンを押すと、TnymaAI が QQ 公式 TnymaAI ログインページを開きます",
                 "スマホ版 QQ で QR コードを読み取り、開発者ログインを確認します",
                 "QR が期限切れになっても、TnymaAI が自動で再生成します",
                 "ログイン成功後、TnymaAI が新しい QQ ボットを自動で作成します",

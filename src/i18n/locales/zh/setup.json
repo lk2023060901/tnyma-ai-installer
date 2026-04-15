@@ -26,12 +26,12 @@
         },
         "complete": {
             "title": "准备就绪！",
-            "description": "OpenClaw 已配置完成，随时可以打开"
+            "description": "TnymaAI 已配置完成，随时可以打开"
         }
     },
     "welcome": {
         "title": "欢迎使用 TnymaAI",
-        "description": "TnymaAI 是 OpenClaw 的图形界面，让您可以在喜爱的消息平台上轻松使用 AI 助手。",
+        "description": "TnymaAI 是图形化界面，让您可以在喜爱的消息平台上轻松使用 AI 助手。",
         "features": {
             "noCommand": "无需命令行",
             "modernUI": "现代美观的界面",
@@ -44,7 +44,7 @@
         "viewLogs": "查看日志",
         "recheck": "重新检查",
         "nodejs": "Node.js 运行时",
-        "openclaw": "OpenClaw 包",
+        "openclaw": "TnymaAI 包",
         "gateway": "网关服务",
         "startGateway": "启动网关",
         "status": {
@@ -52,11 +52,11 @@
             "success": "Node.js 可用",
             "error": "失败",
             "gatewayRunning": "运行在端口 {{port}}",
-            "packageReady": "OpenClaw 包已就绪"
+            "packageReady": "TnymaAI 包已就绪"
         },
         "issue": {
             "title": "检测到环境问题",
-            "desc": "请确保 OpenClaw 已正确安装。查看日志以获取详情。"
+            "desc": "请确保 TnymaAI 已正确安装。查看日志以获取详情。"
         },
         "logs": {
             "title": "应用程序日志",
@@ -173,7 +173,7 @@
     },
     "complete": {
         "title": "设置完成！",
-        "subtitle": "TnymaAI 已完成 OpenClaw 配置。网关会继续在后台运行，安装器内置的 TnymaAI Web 页面已可打开。",
+        "subtitle": "TnymaAI 已完成内置运行时配置。网关会继续在后台运行，安装器内置的 TnymaAI Web 页面已可打开。",
         "provider": "AI 提供商",
         "components": "组件",
         "gateway": "网关",
@@ -181,7 +181,7 @@
         "footer": "点击“打开 Control UI”即可进入安装器内置的 TnymaAI Web 页面。"
     },
     "launcher": {
-        "title": "OpenClaw 已准备就绪",
+        "title": "TnymaAI 已准备就绪",
         "subtitle": "配置已完成。这里不再显示安装向导，只保留打开安装器内置 TnymaAI Web 页面的入口。",
         "opening": "正在打开..."
     },

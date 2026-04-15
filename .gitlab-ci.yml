@@ -1,0 +1,151 @@
+default:
+  interruptible: true
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - when: never
+
+stages:
+  - verify
+  - bundle
+  - package
+  - release
+
+variables:
+  GIT_DEPTH: "1"
+  GIT_SUBMODULE_STRATEGY: none
+  TNYMA_AI_REF: "main"
+  TNYMA_AI_CHECKOUT_DIR: "$CI_PROJECT_DIR/.ci/tnyma-ai"
+  SKIP_OPENCLAW_NPM_VERIFY: "0"
+
+.setup_posix:
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@10.31.0 --activate
+    - pnpm install --frozen-lockfile
+    - node scripts/ci/verify-openclaw-version.mjs
+    - export TNYMA_AI_SOURCE_ROOT="${TNYMA_AI_SOURCE_ROOT:-$TNYMA_AI_CHECKOUT_DIR}"
+    - node scripts/ci/prepare-tnyma-source.mjs
+
+.setup_windows:
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@10.31.0 --activate
+    - pnpm install --frozen-lockfile
+    - node scripts/ci/verify-openclaw-version.mjs
+    - if (-not $env:TNYMA_AI_SOURCE_ROOT) { $env:TNYMA_AI_SOURCE_ROOT = $env:TNYMA_AI_CHECKOUT_DIR }
+    - node scripts/ci/prepare-tnyma-source.mjs
+
+verify:installer:
+  stage: verify
+  extends: .setup_posix
+  tags:
+    - docker
+  script:
+    - pnpm run typecheck
+    - pnpm test
+
+bundle:services:
+  stage: bundle
+  extends: .setup_posix
+  tags:
+    - docker
+  script:
+    - pnpm run bundle:tnyma-web-stack
+    - node scripts/write-build-metadata.mjs
+  artifacts:
+    when: always
+    paths:
+      - build/tnyma-web-stack/
+      - build/build-metadata.json
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - when: never
+
+package:mac:
+  stage: package
+  extends: .setup_posix
+  tags:
+    - macos
+  script:
+    - pnpm run package:mac
+  artifacts:
+    when: always
+    paths:
+      - release/*.dmg
+      - release/*.zip
+      - build/build-metadata.json
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+    - when: never
+
+package:win:
+  stage: package
+  extends: .setup_windows
+  tags:
+    - windows
+  script:
+    - pnpm run package:win
+  artifacts:
+    when: always
+    paths:
+      - release/*.exe
+      - build/build-metadata.json
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+    - when: never
+
+package:linux:
+  stage: package
+  extends: .setup_posix
+  tags:
+    - linux
+  script:
+    - pnpm run package:linux
+  artifacts:
+    when: always
+    paths:
+      - release/*.AppImage
+      - release/*.deb
+      - release/*.rpm
+      - build/build-metadata.json
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+    - when: never
+
+release:gitlab:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  tags:
+    - docker
+  needs:
+    - job: package:mac
+      artifacts: true
+    - job: package:win
+      artifacts: true
+    - job: package:linux
+      artifacts: true
+  script:
+    - echo "Creating GitLab release for ${CI_COMMIT_TAG}"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: TnymaAI $CI_COMMIT_TAG
+    description: |
+      Cross-platform TnymaAI installer release.
+
+      - The packaged TnymaAI runtime version is recorded in `build/build-metadata.json`
+      - Download artifacts from the package jobs attached to this pipeline
+  rules:
+    - if: $CI_COMMIT_TAG
+    - when: never

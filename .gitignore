@@ -66,3 +66,7 @@ docs/pr-session-notes-*.md
 .cursor/
 .pnpm-store/
 .gitnexus
+.ci/
+ops/gitlab/gitlab.env
+ops/gitlab/.volumes/
+release-mac-signed-*/

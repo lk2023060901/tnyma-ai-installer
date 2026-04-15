@@ -96,6 +96,20 @@ function resolveWebBuildScript() {
   );
 }
 
+function resolveSourceRevision(rootDir) {
+  const result = spawnSync('git', ['-C', rootDir, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+
+  if (result.status !== 0) {
+    return null;
+  }
+
+  const revision = result.stdout.trim();
+  return revision || null;
+}
+
 function runPnpmBuildWeb() {
   const buildScript = resolveWebBuildScript();
   const command = process.platform === 'win32'
@@ -274,9 +288,16 @@ function writeManifest() {
     throw new Error(`Unable to find bundled web server.js under ${WEB_OUTPUT_ROOT}`);
   }
 
+  const packageJson = JSON.parse(readFileSync(path.join(SOURCE_ROOT, 'package.json'), 'utf8'));
+
   const manifest = {
-    sourceRoot: SOURCE_ROOT,
     builtAt: new Date().toISOString(),
+    sourceProject: packageJson.name || 'tnyma-ai',
+    sourceVersion: packageJson.version || null,
+    sourceRevision: resolveSourceRevision(SOURCE_ROOT),
+    bridge: {
+      mode: 'embedded',
+    },
     web: {
       root: 'web',
       entry: `web/${webEntry}`,
