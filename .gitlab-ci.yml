@@ -41,6 +41,8 @@ variables:
 
 .setup_windows:
   before_script:
+    - $env:Path = 'C:\Program Files\Git\cmd;C:\Program Files\Git\bin;' + $env:Path
+    - where.exe git
     - corepack enable
     - corepack prepare pnpm@10.31.0 --activate
     - pnpm install --frozen-lockfile
