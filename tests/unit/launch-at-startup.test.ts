@@ -51,7 +51,8 @@ describe('launch-at-startup integration', () => {
     await applyLaunchAtStartupSetting(true);
     expect(setLoginItemSettingsMock).toHaveBeenCalledWith({
       openAtLogin: true,
-      openAsHidden: false,
+      openAsHidden: true,
+      args: ['--background'],
     });
   });
 
@@ -63,6 +64,7 @@ describe('launch-at-startup integration', () => {
     expect(setLoginItemSettingsMock).toHaveBeenCalledWith({
       openAtLogin: false,
       openAsHidden: false,
+      args: [],
     });
   });
 
