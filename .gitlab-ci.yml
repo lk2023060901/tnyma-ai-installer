@@ -141,6 +141,7 @@ package:win:
   extends: .setup_windows
   tags:
     - windows
+  timeout: 3h
   script:
     - pnpm run package:win
   after_script:
@@ -171,6 +172,7 @@ package:linux:
   extends: .setup_posix
   tags:
     - linux
+  timeout: 3h
   script:
     - pnpm run package:linux
   after_script:
