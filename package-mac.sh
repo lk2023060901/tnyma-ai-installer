@@ -146,13 +146,6 @@ load_signing_env() {
   if [ -n "${TNYMAAI_MAC_SIGNING_ENV:-}" ] && load_signing_env_file "${TNYMAAI_MAC_SIGNING_ENV}"; then
     return 0
   fi
-
-  if load_signing_env_file "${HOME}/.tnymaai-mac-signing.env"; then
-    return 0
-  fi
-
-  # Backward-compatible fallback for the current workstation setup.
-  load_signing_env_file "/Volumes/work/tnymaai-signing/tnymaai-mac-signing.env" || true
 }
 
 require_env() {
