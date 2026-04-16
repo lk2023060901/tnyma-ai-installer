@@ -101,5 +101,8 @@ if [ ! -f "${ZIP_PATH}" ]; then
   exit 1
 fi
 
+echo "==> Removing update artifacts"
+node scripts/remove-update-artifacts.mjs
+
 echo "==> Done"
 ls -lah "${DMG_PATH}" "${ZIP_PATH}"

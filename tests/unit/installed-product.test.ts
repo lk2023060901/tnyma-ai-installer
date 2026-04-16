@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  excludeCurrentInstallMarkerPaths,
+  getCurrentInstallMarkerPaths,
   getExistingPathIndicators,
   getInstalledProductCandidatePaths,
 } from '@electron/services/installed-product';
@@ -41,5 +43,21 @@ describe('installed-product service helpers', () => {
       { kind: 'path', value: '/Users/liukai/.openclaw' },
       { kind: 'path', value: '/opt/TnymaAI' },
     ]);
+  });
+
+  it('detects the current macOS app bundle path from process.execPath', () => {
+    const markers = getCurrentInstallMarkerPaths('darwin', '/Applications/TnymaAI.app/Contents/MacOS/TnymaAI');
+
+    expect(markers).toEqual(['/Applications/TnymaAI.app']);
+  });
+
+  it('excludes the current running macOS app bundle from install markers', () => {
+    const filtered = excludeCurrentInstallMarkerPaths(
+      ['/Applications/TnymaAI.app', '/Applications/OpenClaw.app', '/Users/liukai/.openclaw'],
+      'darwin',
+      '/Applications/TnymaAI.app/Contents/MacOS/TnymaAI',
+    );
+
+    expect(filtered).toEqual(['/Applications/OpenClaw.app', '/Users/liukai/.openclaw']);
   });
 });

@@ -185,19 +185,13 @@ function isPrimaryDownloadAsset(filename) {
   return /\.(dmg|zip|exe|AppImage|deb|rpm)$/i.test(filename);
 }
 
-function isSupportAsset(filename) {
-  return /^latest.*\.yml$/i.test(filename) || /\.blockmap$/i.test(filename);
-}
-
 function sortAssets(a, b) {
   const rank = (asset) => {
     const name = asset.filename.toLowerCase();
     if (name.includes('-mac-')) return 0;
     if (name.includes('-win')) return 1;
     if (name.includes('-linux')) return 2;
-    if (name.endsWith('.yml')) return 3;
-    if (name.endsWith('.blockmap')) return 4;
-    return 5;
+    return 3;
   };
 
   const rankDiff = rank(a) - rank(b);
@@ -222,7 +216,7 @@ function collectAssets() {
       path: targetPath,
       filename: path.basename(targetPath),
     }))
-    .filter(({ filename }) => isPrimaryDownloadAsset(filename) || isSupportAsset(filename))
+    .filter(({ filename }) => isPrimaryDownloadAsset(filename))
     .map((asset) => ({
       ...asset,
       packageUrl: `${CI_API_V4_URL}/projects/${encodeURIComponent(CI_PROJECT_ID)}/packages/generic/${encodeURIComponent(PACKAGE_NAME)}/${encodeURIComponent(CI_COMMIT_TAG)}/${encodeURIComponent(asset.filename)}`,
@@ -277,24 +271,6 @@ function buildDownloadsMarkdown(assets) {
   return lines.join('\n');
 }
 
-function buildSupportAssetsMarkdown(assets) {
-  const support = assets.filter((asset) => !asset.primary && asset.filename.toLowerCase().endsWith('.yml'));
-  if (support.length === 0) {
-    return '';
-  }
-
-  const lines = [
-    '## Update Feeds',
-    '',
-  ];
-
-  for (const asset of support) {
-    lines.push(`- [\`${asset.filename}\`](${asset.directDownloadUrl})`);
-  }
-
-  return lines.join('\n');
-}
-
 function buildChangelogMarkdown(previousTag, commits) {
   if (commits.length === 0) {
     return '## Changes\n\n- No new commits were detected for this tag.\n';
@@ -339,7 +315,6 @@ function buildReleaseNotes(previousTag, commits, assets, metadata) {
     || null;
   const tnymaRevision = metadata?.tnymaAi?.revision || null;
   const downloadsMarkdown = buildDownloadsMarkdown(assets);
-  const supportMarkdown = buildSupportAssetsMarkdown(assets);
   const changelogMarkdown = buildChangelogMarkdown(previousTag, commits);
 
   const lines = [
@@ -356,10 +331,6 @@ function buildReleaseNotes(previousTag, commits, assets, metadata) {
 
   if (downloadsMarkdown) {
     lines.push(downloadsMarkdown, '');
-  }
-
-  if (supportMarkdown) {
-    lines.push(supportMarkdown, '');
   }
 
   lines.push(changelogMarkdown.trimEnd());

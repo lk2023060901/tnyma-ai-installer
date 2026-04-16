@@ -332,5 +332,7 @@ echo "==> [$(timestamp)] Signing and notarizing dmg containers"
 sign_and_notarize_dmg "macOS x64" "release/TnymaAI-${VERSION}-mac-x64.dmg" "${DMG_CODESIGN_IDENTITY}"
 sign_and_notarize_dmg "macOS arm64" "release/TnymaAI-${VERSION}-mac-arm64.dmg" "${DMG_CODESIGN_IDENTITY}"
 
+run_step "Removing update artifacts" node scripts/remove-update-artifacts.mjs
+
 echo "==> [$(timestamp)] Done"
 find release -maxdepth 1 -type f | sort

@@ -40,6 +40,13 @@ function uniquePaths(paths: string[]): string[] {
   return [...new Set(paths.filter(Boolean))];
 }
 
+function normalizePathForComparison(targetPath: string, platform: NodeJS.Platform): string {
+  const normalized = platform === 'win32'
+    ? path.win32.normalize(targetPath)
+    : path.posix.normalize(targetPath);
+  return platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 function getWindowsLocalAppData(env = process.env, homeDir = homedir()): string {
   return env.LOCALAPPDATA?.trim() || path.win32.join(homeDir, 'AppData', 'Local');
 }
@@ -55,6 +62,51 @@ function getMacAppBundles(homeDir: string): string[] {
     '/Applications/OpenClaw.app',
     path.posix.join(homeDir, 'Applications', 'OpenClaw.app'),
   ];
+}
+
+export function getCurrentInstallMarkerPaths(
+  platform: NodeJS.Platform = process.platform,
+  execPathValue = process.execPath,
+): string[] {
+  if (!execPathValue) {
+    return [];
+  }
+
+  if (platform === 'darwin') {
+    const marker = `.app${path.posix.sep}Contents${path.posix.sep}`;
+    const normalized = path.posix.normalize(execPathValue);
+    const markerIndex = normalized.indexOf(marker);
+    if (markerIndex >= 0) {
+      return [normalized.slice(0, markerIndex + '.app'.length)];
+    }
+    return [];
+  }
+
+  if (platform === 'win32') {
+    const normalized = path.win32.normalize(execPathValue);
+    return [path.win32.dirname(normalized)];
+  }
+
+  const normalized = path.posix.normalize(execPathValue);
+  return POSIX_INSTALL_ROOTS.filter((root) => normalized === root || normalized.startsWith(`${root}/`));
+}
+
+export function excludeCurrentInstallMarkerPaths(
+  candidatePaths: string[],
+  platform: NodeJS.Platform = process.platform,
+  execPathValue = process.execPath,
+): string[] {
+  const currentMarkers = new Set(
+    getCurrentInstallMarkerPaths(platform, execPathValue).map((targetPath) => normalizePathForComparison(targetPath, platform)),
+  );
+
+  if (currentMarkers.size === 0) {
+    return candidatePaths;
+  }
+
+  return candidatePaths.filter(
+    (targetPath) => !currentMarkers.has(normalizePathForComparison(targetPath, platform)),
+  );
 }
 
 function joinForPlatform(platform: NodeJS.Platform, ...segments: string[]): string {
@@ -182,6 +234,36 @@ async function getListeningProcessIds(port: number): Promise<string[]> {
   }
 }
 
+async function getProcessIdsByImage(image: string): Promise<number[]> {
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await execAsync(`tasklist /FO CSV /NH /FI "IMAGENAME eq ${image}"`, {
+        timeout: 5000,
+        windowsHide: true,
+      });
+
+      return stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => line.replace(/^"|"$/g, '').split('","'))
+        .filter((parts) => parts.length >= 2 && parts[0].toLowerCase() === image.toLowerCase())
+        .map((parts) => Number.parseInt(parts[1], 10))
+        .filter((pid) => Number.isInteger(pid) && pid > 0);
+    }
+
+    const { stdout } = await execAsync(`pgrep -x "${image}"`, { timeout: 5000 });
+    return stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return [];
+  }
+}
+
 async function stopListeningProcesses(port: number): Promise<void> {
   const processIds = await getListeningProcessIds(port);
   for (const processId of processIds) {
@@ -200,20 +282,32 @@ async function stopListeningProcesses(port: number): Promise<void> {
 async function stopKnownProcesses(): Promise<void> {
   if (process.platform === 'win32') {
     for (const image of WINDOWS_PROCESS_IMAGES) {
-      try {
-        await execAsync(`taskkill /IM "${image}" /F /T`, { timeout: 5000, windowsHide: true });
-      } catch {
-        // Ignore already-stopped processes.
+      const processIds = await getProcessIdsByImage(image);
+      for (const processId of processIds) {
+        if (processId === process.pid) {
+          continue;
+        }
+        try {
+          await execAsync(`taskkill /F /PID ${processId} /T`, { timeout: 5000, windowsHide: true });
+        } catch {
+          // Ignore already-stopped processes.
+        }
       }
     }
     return;
   }
 
   for (const name of POSIX_PROCESS_NAMES) {
-    try {
-      await execAsync(`pkill -x "${name}"`, { timeout: 5000 });
-    } catch {
-      // Ignore already-stopped processes.
+    const processIds = await getProcessIdsByImage(name);
+    for (const processId of processIds) {
+      if (processId === process.pid) {
+        continue;
+      }
+      try {
+        process.kill(processId, 'SIGTERM');
+      } catch {
+        // Ignore already-stopped processes.
+      }
     }
   }
 }
@@ -233,7 +327,9 @@ async function removePathIfPresent(path: string): Promise<boolean> {
 }
 
 export async function detectInstalledProducts(): Promise<InstalledProductCheckResult> {
-  const indicators = getExistingPathIndicators(getInstalledProductCandidatePaths());
+  const indicators = getExistingPathIndicators(
+    excludeCurrentInstallMarkerPaths(getInstalledProductCandidatePaths()),
+  );
   if (await isGatewayPortOccupied()) {
     indicators.push({ kind: 'port', value: `127.0.0.1:${PORTS.OPENCLAW_GATEWAY}` });
   }
@@ -247,7 +343,7 @@ export async function detectInstalledProducts(): Promise<InstalledProductCheckRe
 }
 
 export async function uninstallInstalledProducts(): Promise<InstalledProductUninstallResult> {
-  const candidatePaths = getInstalledProductCandidatePaths();
+  const candidatePaths = excludeCurrentInstallMarkerPaths(getInstalledProductCandidatePaths());
   const removedPaths: string[] = [];
   const failures: string[] = [];
 

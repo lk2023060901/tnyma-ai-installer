@@ -127,8 +127,6 @@ package:mac:
     paths:
       - release/*.dmg
       - release/*.zip
-      - release/*.blockmap
-      - release/latest*.yml
       - build/build-metadata.json
   rules:
     - if: $CI_COMMIT_TAG
@@ -158,8 +156,6 @@ package:win:
     expire_in: 14 days
     paths:
       - release/*.exe
-      - release/*.blockmap
-      - release/latest*.yml
       - build/build-metadata.json
   rules:
     - if: $CI_COMMIT_TAG
@@ -194,7 +190,6 @@ package:linux:
       - release/*.AppImage
       - release/*.deb
       - release/*.rpm
-      - release/latest*.yml
       - build/build-metadata.json
   rules:
     - if: $CI_COMMIT_TAG
