@@ -165,8 +165,8 @@ Tag pipelines also enforce release inputs:
 
 The pipeline supports two optional Feishu bots:
 
-- build bot: sends a message whenever verify / bundle / package fails; successful builds stay silent
-- release bot: sends a success message with the GitLab Release page and download links, and also sends a failure message when the release stage fails
+- build bot: sends a message immediately from the failing verify / bundle / package job; successful builds stay silent
+- release bot: sends a message immediately from the `release:gitlab` job on both success and failure
 
 Recommended CI/CD variables:
 

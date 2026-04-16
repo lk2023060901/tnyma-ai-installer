@@ -185,6 +185,33 @@ async function fetchPipelineJobSummary() {
     }));
 }
 
+function currentJobSummary() {
+  const name = process.env.CI_JOB_NAME?.trim() || '';
+  const status = process.env.CI_JOB_STATUS?.trim() || '';
+  if (!name || !status) {
+    return null;
+  }
+
+  return {
+    name,
+    status,
+    stage: process.env.CI_JOB_STAGE?.trim() || '',
+    url: process.env.CI_JOB_URL?.trim() || '',
+  };
+}
+
+function mergeCurrentJobSummary(jobSummary) {
+  const currentJob = currentJobSummary();
+  if (!currentJob) {
+    return jobSummary;
+  }
+
+  return [
+    ...jobSummary.filter((job) => job.name !== currentJob.name),
+    currentJob,
+  ];
+}
+
 function loadReleaseDownloadLinks() {
   try {
     const lines = readFileSync(RELEASE_NOTES_PATH, 'utf8').split('\n');
@@ -350,7 +377,7 @@ async function main() {
   }
 
   const metadata = loadJson(BUILD_METADATA_PATH);
-  const jobSummary = await fetchPipelineJobSummary();
+  const jobSummary = mergeCurrentJobSummary(await fetchPipelineJobSummary());
   let content = '';
 
   if (mode === 'build-success') {

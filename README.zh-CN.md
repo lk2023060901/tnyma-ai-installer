@@ -372,7 +372,7 @@ pnpm run cleanup:installed:mac -- --yes  # 清理已安装的 macOS 应用数据
 
 流水线默认以 npm 上的 `openclaw` 包作为运行时真源，并要求 `tnyma-ai` 以编译后的运行时产物形式打入安装包。
 对于 tag 流水线，GitLab CI 还会自动发布一个 GitLab Release 页面，附带自动生成的变更记录，以及 macOS、Windows、Linux 安装包的长期下载链接。
-Tag 流水线现在还会强制校验不可变的 `TNYMA_AI_REF`，验证 macOS notarization，并可选在构建失败、发布成功或失败时通知飞书机器人。macOS runner 会通过 `package-mac.sh` 支持基于 `notarytool` keychain profile 的公证流程。
+Tag 流水线现在还会强制校验不可变的 `TNYMA_AI_REF`，验证 macOS notarization，并可选在 verify / bundle / package 作业失败时即时通知飞书机器人，以及在发布作业成功或失败时即时通知飞书机器人。macOS runner 会通过 `package-mac.sh` 支持基于 `notarytool` keychain profile 的公证流程。
 
 ### 通信回归检查
 

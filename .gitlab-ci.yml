@@ -14,7 +14,6 @@ stages:
   - package
   - announce
   - release
-  - notify
 
 variables:
   GIT_DEPTH: "1"
@@ -22,25 +21,6 @@ variables:
   TNYMA_AI_REF: "main"
   TNYMA_AI_CHECKOUT_DIR: "$CI_PROJECT_DIR/.ci/tnyma-ai"
   SKIP_OPENCLAW_NPM_VERIFY: "0"
-
-notify:build:failure:feishu:
-  stage: notify
-  image: node:20-bookworm
-  tags:
-    - docker
-  allow_failure: true
-  dependencies: []
-  script:
-    - node scripts/ci/notify-feishu.mjs build-failure
-  when: on_failure
-  rules:
-    - if: $CI_COMMIT_TAG
-      when: on_failure
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: on_failure
-    - if: $CI_COMMIT_BRANCH
-      when: on_failure
-    - when: never
 
 .setup_posix:
   before_script:
@@ -80,6 +60,18 @@ verify:installer:
     - node scripts/ci/verify-openclaw-version.mjs
     - pnpm run typecheck
     - pnpm test
+  after_script:
+    - |
+      export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+      if ! command -v node >/dev/null 2>&1; then
+        NVM_NODE_BIN="$(find "$HOME/.nvm/versions/node" -maxdepth 3 -type f -name node 2>/dev/null | sort | tail -n 1)"
+        if [ -n "$NVM_NODE_BIN" ]; then
+          export PATH="$(dirname "$NVM_NODE_BIN"):$PATH"
+        fi
+      fi
+      if [ "${CI_JOB_STATUS:-success}" != "success" ]; then
+        node scripts/ci/notify-feishu.mjs build-failure || true
+      fi
 
 bundle:services:
   stage: bundle
@@ -90,6 +82,18 @@ bundle:services:
     - node scripts/ci/verify-openclaw-version.mjs
     - pnpm run bundle:tnyma-web-stack
     - node scripts/write-build-metadata.mjs
+  after_script:
+    - |
+      export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+      if ! command -v node >/dev/null 2>&1; then
+        NVM_NODE_BIN="$(find "$HOME/.nvm/versions/node" -maxdepth 3 -type f -name node 2>/dev/null | sort | tail -n 1)"
+        if [ -n "$NVM_NODE_BIN" ]; then
+          export PATH="$(dirname "$NVM_NODE_BIN"):$PATH"
+        fi
+      fi
+      if [ "${CI_JOB_STATUS:-success}" != "success" ]; then
+        node scripts/ci/notify-feishu.mjs build-failure || true
+      fi
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -105,6 +109,18 @@ package:mac:
   script:
     - bash package-mac.sh
     - bash scripts/ci/verify-macos-notarization.sh
+  after_script:
+    - |
+      export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+      if ! command -v node >/dev/null 2>&1; then
+        NVM_NODE_BIN="$(find "$HOME/.nvm/versions/node" -maxdepth 3 -type f -name node 2>/dev/null | sort | tail -n 1)"
+        if [ -n "$NVM_NODE_BIN" ]; then
+          export PATH="$(dirname "$NVM_NODE_BIN"):$PATH"
+        fi
+      fi
+      if [ "${CI_JOB_STATUS:-success}" != "success" ]; then
+        node scripts/ci/notify-feishu.mjs build-failure || true
+      fi
   artifacts:
     when: always
     expire_in: 14 days
@@ -127,6 +143,15 @@ package:win:
     - windows
   script:
     - pnpm run package:win
+  after_script:
+    - |
+      if ($env:CI_JOB_STATUS -ne "success") {
+        try {
+          node scripts/ci/notify-feishu.mjs build-failure
+        } catch {
+          Write-Host $_
+        }
+      }
   artifacts:
     when: always
     expire_in: 14 days
@@ -148,6 +173,18 @@ package:linux:
     - linux
   script:
     - pnpm run package:linux
+  after_script:
+    - |
+      export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+      if ! command -v node >/dev/null 2>&1; then
+        NVM_NODE_BIN="$(find "$HOME/.nvm/versions/node" -maxdepth 3 -type f -name node 2>/dev/null | sort | tail -n 1)"
+        if [ -n "$NVM_NODE_BIN" ]; then
+          export PATH="$(dirname "$NVM_NODE_BIN"):$PATH"
+        fi
+      fi
+      if [ "${CI_JOB_STATUS:-success}" != "success" ]; then
+        node scripts/ci/notify-feishu.mjs build-failure || true
+      fi
   artifacts:
     when: always
     expire_in: 14 days
@@ -181,6 +218,17 @@ release:gitlab:
     - apt-get update
     - apt-get install -y --no-install-recommends git ca-certificates
     - node scripts/ci/publish-gitlab-release.mjs
+  after_script:
+    - |
+      export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+      case "${CI_JOB_STATUS:-}" in
+        success)
+          node scripts/ci/notify-feishu.mjs release-success || true
+          ;;
+        failed|canceled)
+          node scripts/ci/notify-feishu.mjs release-failure || true
+          ;;
+      esac
   artifacts:
     when: always
     expire_in: 180 days
@@ -188,37 +236,4 @@ release:gitlab:
       - build/release-notes.md
   rules:
     - if: $CI_COMMIT_TAG
-    - when: never
-
-notify:release:success:feishu:
-  stage: notify
-  image: node:20-bookworm
-  tags:
-    - docker
-  allow_failure: true
-  needs:
-    - job: release:gitlab
-      artifacts: true
-  script:
-    - node scripts/ci/notify-feishu.mjs release-success
-  rules:
-    - if: $CI_COMMIT_TAG
-    - when: never
-
-notify:release:failure:feishu:
-  stage: notify
-  image: node:20-bookworm
-  tags:
-    - docker
-  allow_failure: true
-  dependencies: []
-  needs:
-    - job: release:gitlab
-      optional: true
-  script:
-    - node scripts/ci/notify-feishu.mjs release-failure
-  when: on_failure
-  rules:
-    - if: $CI_COMMIT_TAG
-      when: on_failure
     - when: never

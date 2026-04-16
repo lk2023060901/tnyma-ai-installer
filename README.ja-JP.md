@@ -368,7 +368,7 @@ pnpm run cleanup:installed:mac -- --yes  # インストール済み macOS アプ
 
 このパイプラインは npm 上の `openclaw` パッケージをランタイムの正本として扱い、`tnyma-ai` はコンパイル済みランタイム成果物としてインストーラーに同梱される前提です。
 タグ付きパイプラインでは、GitLab CI が自動で GitLab Release ページも公開し、生成された変更履歴と macOS / Windows / Linux インストーラーの恒久的なダウンロードリンクを掲載します。
-タグ付きパイプラインではさらに、`TNYMA_AI_REF` を不変参照に固定し、macOS の notarization を検証し、任意でビルド失敗時およびリリース成功/失敗時に Feishu ボットへ通知できます。macOS runner では `package-mac.sh` 経由で `notarytool` の keychain profile を使った notarization もサポートします。
+タグ付きパイプラインではさらに、`TNYMA_AI_REF` を不変参照に固定し、macOS の notarization を検証し、verify / bundle / package ジョブが失敗した時点で Feishu ボットへ即時通知し、release ジョブの成功/失敗時にも即時通知できます。macOS runner では `package-mac.sh` 経由で `notarytool` の keychain profile を使った notarization もサポートします。
 
 ### 通信回帰チェック
 
