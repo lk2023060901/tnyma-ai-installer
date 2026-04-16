@@ -185,6 +185,27 @@
         "subtitle": "配置已完成。这里不再显示安装向导，只保留打开安装器内置 TnymaAI Web 页面的入口。",
         "opening": "正在打开..."
     },
+    "existingInstall": {
+        "checkingTitle": "正在检查已安装的 OpenClaw 同类产品",
+        "checkingDescription": "启动安装前，先检查默认安装目录、运行时目录和 18789 端口。",
+        "checkingHint": "正在扫描 ~/.openclaw、默认安装目录和默认网关端口…",
+        "detectedTitle": "检测到已安装的 OpenClaw 同类产品",
+        "detectedDescription": "为避免配置和端口冲突，请先卸载已安装产品，再继续当前安装。",
+        "detectedItemsTitle": "检测到的安装痕迹",
+        "dialogTitle": "发现已安装产品",
+        "dialogMessage": "检测到以下安装痕迹：{{details}}。是否先卸载后继续安装？",
+        "confirm": "同意并卸载",
+        "cancel": "取消并退出",
+        "progress": "卸载进度",
+        "uninstallingTitle": "正在卸载已安装产品",
+        "uninstallingDescription": "正在移除已安装的 OpenClaw 同类产品。完成后会自动进入安装步骤。",
+        "uninstallFailedTitle": "卸载失败",
+        "uninstallFailedDescription": "未能完全卸载已安装产品。请关闭相关进程后重试，或先手动清理。",
+        "retry": "重试卸载",
+        "exit": "退出安装器",
+        "indicatorPath": "路径：{{value}}",
+        "indicatorPort": "端口：{{value}}"
+    },
     "nav": {
         "next": "下一步",
         "back": "返回",

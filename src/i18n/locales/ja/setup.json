@@ -185,6 +185,27 @@
         "subtitle": "セットアップは完了しています。ここではセットアップウィザードを再表示せず、同梱された TnymaAI Web ページを開く入口だけを表示します。",
         "opening": "開いています..."
     },
+    "existingInstall": {
+        "checkingTitle": "既存の OpenClaw 系製品を確認しています",
+        "checkingDescription": "セットアップ開始前に、既定のインストール先、ランタイム用ディレクトリ、ポート 18789 を確認します。",
+        "checkingHint": "~/.openclaw、既定のインストール先、既定のゲートウェイポートを確認しています…",
+        "detectedTitle": "既存の OpenClaw 系製品が見つかりました",
+        "detectedDescription": "設定やポートの競合を避けるため、続行する前に既存製品をアンインストールしてください。",
+        "detectedItemsTitle": "検出されたインストール痕跡",
+        "dialogTitle": "既存製品が見つかりました",
+        "dialogMessage": "次のインストール痕跡が見つかりました: {{details}}。アンインストールしてから続行しますか？",
+        "confirm": "同意してアンインストール",
+        "cancel": "キャンセルして終了",
+        "progress": "アンインストール進行状況",
+        "uninstallingTitle": "既存製品をアンインストールしています",
+        "uninstallingDescription": "検出された OpenClaw 系製品を削除しています。完了後、自動的にセットアップへ進みます。",
+        "uninstallFailedTitle": "アンインストールに失敗しました",
+        "uninstallFailedDescription": "既存製品を完全には削除できませんでした。関連プロセスを終了して再試行するか、先に手動でクリーンアップしてください。",
+        "retry": "再試行",
+        "exit": "インストーラーを終了",
+        "indicatorPath": "パス: {{value}}",
+        "indicatorPort": "ポート: {{value}}"
+    },
     "nav": {
         "next": "次へ",
         "back": "戻る",

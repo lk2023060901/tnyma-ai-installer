@@ -5,6 +5,7 @@ import { setCorsHeaders, sendJson, sendNoContent } from '../route-utils';
 import { runOpenClawDoctor, runOpenClawDoctorFix } from '../../utils/openclaw-doctor';
 import { getSetting } from '../../utils/store';
 import { PORTS } from '../../utils/config';
+import { detectInstalledProducts, uninstallInstalledProducts } from '../../services/installed-product';
 
 async function ensureGatewayRunning(ctx: HostApiContext) {
   const status = ctx.gatewayManager.getStatus().state;
@@ -55,6 +56,16 @@ export async function handleAppRoutes(
       webPort: PORTS.TNYMA_AI_WEB,
       liveGatewayPort: PORTS.TNYMA_AI_LIVE_GATEWAY,
     });
+    return true;
+  }
+
+  if (url.pathname === '/api/app/installed-products' && req.method === 'GET') {
+    sendJson(res, 200, await detectInstalledProducts());
+    return true;
+  }
+
+  if (url.pathname === '/api/app/installed-products/uninstall' && req.method === 'POST') {
+    sendJson(res, 200, await uninstallInstalledProducts());
     return true;
   }
 

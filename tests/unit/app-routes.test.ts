@@ -3,12 +3,19 @@ import type { IncomingMessage, ServerResponse } from 'http';
 
 const runOpenClawDoctorMock = vi.fn();
 const runOpenClawDoctorFixMock = vi.fn();
+const detectInstalledProductsMock = vi.fn();
+const uninstallInstalledProductsMock = vi.fn();
 const sendJsonMock = vi.fn();
 const sendNoContentMock = vi.fn();
 
 vi.mock('@electron/utils/openclaw-doctor', () => ({
   runOpenClawDoctor: (...args: unknown[]) => runOpenClawDoctorMock(...args),
   runOpenClawDoctorFix: (...args: unknown[]) => runOpenClawDoctorFixMock(...args),
+}));
+
+vi.mock('@electron/services/installed-product', () => ({
+  detectInstalledProducts: (...args: unknown[]) => detectInstalledProductsMock(...args),
+  uninstallInstalledProducts: (...args: unknown[]) => uninstallInstalledProductsMock(...args),
 }));
 
 vi.mock('@electron/api/route-utils', () => ({
@@ -55,5 +62,59 @@ describe('handleAppRoutes', () => {
     expect(handled).toBe(true);
     expect(runOpenClawDoctorFixMock).toHaveBeenCalledTimes(1);
     expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, { success: false, exitCode: 1 });
+  });
+
+  it('returns installed product detection status through the host api', async () => {
+    detectInstalledProductsMock.mockResolvedValueOnce({
+      success: true,
+      detected: true,
+      platform: 'darwin',
+      indicators: [{ kind: 'path', value: '/Users/test/.openclaw' }],
+    });
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'GET' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:3210/api/app/installed-products'),
+      {} as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(detectInstalledProductsMock).toHaveBeenCalledTimes(1);
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, {
+      success: true,
+      detected: true,
+      platform: 'darwin',
+      indicators: [{ kind: 'path', value: '/Users/test/.openclaw' }],
+    });
+  });
+
+  it('runs installed product uninstall through the host api', async () => {
+    uninstallInstalledProductsMock.mockResolvedValueOnce({
+      success: true,
+      platform: 'win32',
+      removedPaths: ['C:\\Users\\test\\.openclaw'],
+      failures: [],
+      remainingIndicators: [],
+    });
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:3210/api/app/installed-products/uninstall'),
+      {} as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(uninstallInstalledProductsMock).toHaveBeenCalledTimes(1);
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, {
+      success: true,
+      platform: 'win32',
+      removedPaths: ['C:\\Users\\test\\.openclaw'],
+      failures: [],
+      remainingIndicators: [],
+    });
   });
 });

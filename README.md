@@ -42,6 +42,7 @@
 Whether you're automating workflows, managing AI-powered channels, or scheduling intelligent tasks, TnymaAI provides the interface you need to harness AI agents effectively.
 
 TnymaAI comes pre-configured with best-practice model providers and natively supports Windows as well as multi-language settings. Of course, you can also fine-tune advanced configurations via **Settings → Advanced → Developer Mode**.
+On first launch, the installer now checks for existing OpenClaw-compatible desktop installs and can guide the user through removing them before setup continues.
 
 ---
 ## Screenshot

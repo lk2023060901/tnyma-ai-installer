@@ -25,7 +25,9 @@ import {
 } from 'lucide-react';
 import { TitleBar } from '@/components/layout/TitleBar';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
@@ -162,6 +164,24 @@ type AutoSetupProgressEntry = {
   status: AutoSetupProgressStatus;
   stepId: string;
 };
+type ExistingInstallIndicator = {
+  kind: 'path' | 'port';
+  value: string;
+};
+type ExistingInstallCheckResponse = {
+  success: true;
+  detected: boolean;
+  platform: string;
+  indicators: ExistingInstallIndicator[];
+};
+type ExistingInstallUninstallResponse = {
+  success: boolean;
+  platform: string;
+  removedPaths: string[];
+  failures: string[];
+  remainingIndicators: ExistingInstallIndicator[];
+};
+type ExistingInstallGateState = 'checking' | 'ready' | 'detected' | 'uninstalling' | 'error';
 
 function isSetupManagedChannelType(value: string): value is SetupManagedChannelType {
   return value === 'wechat' || value === 'feishu' || value === 'qqbot';
@@ -202,6 +222,12 @@ interface SetupStepHandle {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatExistingInstallIndicator(t: TFunction, indicator: ExistingInstallIndicator): string {
+  return indicator.kind === 'port'
+    ? t('existingInstall.indicatorPort', { value: indicator.value })
+    : t('existingInstall.indicatorPath', { value: indicator.value });
 }
 
 async function fetchControlUiUrl(): Promise<string> {
@@ -279,6 +305,15 @@ export function Setup() {
   const setupComplete = useSettingsStore((state) => state.setupComplete);
   const markSetupComplete = useSettingsStore((state) => state.markSetupComplete);
   const [openingControlUi, setOpeningControlUi] = useState(false);
+  const [existingInstallGateState, setExistingInstallGateState] = useState<ExistingInstallGateState>(
+    setupComplete ? 'ready' : 'checking',
+  );
+  const [existingInstallIndicators, setExistingInstallIndicators] = useState<ExistingInstallIndicator[]>([]);
+  const [existingInstallFailures, setExistingInstallFailures] = useState<string[]>([]);
+  const [showExistingInstallDialog, setShowExistingInstallDialog] = useState(false);
+  const [existingInstallProgress, setExistingInstallProgress] = useState(0);
+  const [existingInstallError, setExistingInstallError] = useState<string | null>(null);
+  const [existingInstallErrorSource, setExistingInstallErrorSource] = useState<'check' | 'uninstall'>('check');
   const [currentStep, setCurrentStep] = useState<number>(
     setupComplete ? STEP.COMPLETE : STEP.WELCOME,
   );
@@ -330,8 +365,110 @@ export function Setup() {
   useEffect(() => {
     if (setupComplete) {
       setCurrentStep(STEP.COMPLETE);
+      setExistingInstallGateState('ready');
     }
   }, [setupComplete]);
+
+  const runExistingInstallCheck = useCallback(async () => {
+    setExistingInstallGateState('checking');
+    setExistingInstallError(null);
+    setExistingInstallFailures([]);
+
+    try {
+      const result = await hostApiFetch<ExistingInstallCheckResponse>('/api/app/installed-products');
+      setExistingInstallIndicators(result.indicators);
+      if (result.detected) {
+        setExistingInstallGateState('detected');
+        setShowExistingInstallDialog(true);
+        return;
+      }
+
+      setShowExistingInstallDialog(false);
+      setExistingInstallGateState('ready');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setShowExistingInstallDialog(false);
+      setExistingInstallErrorSource('check');
+      setExistingInstallError(message);
+      setExistingInstallGateState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (setupComplete) {
+      return;
+    }
+
+    void runExistingInstallCheck();
+  }, [runExistingInstallCheck, setupComplete]);
+
+  const handleExitInstaller = useCallback(async () => {
+    await invokeIpc('app:quit');
+  }, []);
+
+  const startExistingInstallUninstall = useCallback(async () => {
+    setShowExistingInstallDialog(false);
+    setExistingInstallGateState('uninstalling');
+    setExistingInstallError(null);
+    setExistingInstallFailures([]);
+    setExistingInstallProgress(8);
+
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
+    progressTimer = setInterval(() => {
+      setExistingInstallProgress((current) => (current >= 92 ? current : current + 6));
+    }, 350);
+
+    try {
+      const result = await hostApiFetch<ExistingInstallUninstallResponse>(
+        '/api/app/installed-products/uninstall',
+        { method: 'POST' },
+      );
+
+      if (progressTimer) {
+        clearInterval(progressTimer);
+      }
+
+      setExistingInstallFailures(result.failures);
+
+      if (!result.success) {
+        setExistingInstallIndicators(result.remainingIndicators);
+        setExistingInstallErrorSource('uninstall');
+        setExistingInstallError(result.failures[0] || t('existingInstall.uninstallFailedDescription'));
+        setExistingInstallGateState('error');
+        return;
+      }
+
+      setExistingInstallProgress(100);
+      await delay(450);
+      setExistingInstallIndicators([]);
+      setExistingInstallGateState('ready');
+    } catch (error) {
+      if (progressTimer) {
+        clearInterval(progressTimer);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      setExistingInstallErrorSource('uninstall');
+      setExistingInstallError(message);
+      setExistingInstallGateState('error');
+    }
+  }, [t]);
+
+  const existingInstallDetails = useMemo(
+    () => existingInstallIndicators.map((indicator) => formatExistingInstallIndicator(t, indicator)),
+    [existingInstallIndicators, t],
+  );
+
+  const retryExistingInstallGate = useCallback(async () => {
+    if (existingInstallErrorSource === 'uninstall') {
+      await startExistingInstallUninstall();
+      return;
+    }
+
+    setExistingInstallFailures([]);
+    setExistingInstallIndicators([]);
+    await runExistingInstallCheck();
+  }, [existingInstallErrorSource, runExistingInstallCheck, startExistingInstallUninstall]);
 
   const openControlUi = useCallback(async () => {
     if (openingControlUi) {
@@ -435,6 +572,23 @@ export function Setup() {
             toast.error(String(error));
           }
         }}
+      />
+    );
+  }
+
+  if (existingInstallGateState !== 'ready') {
+    return (
+      <ExistingInstallGate
+        details={existingInstallDetails}
+        dialogOpen={showExistingInstallDialog}
+        errorMessage={existingInstallError}
+        failures={existingInstallFailures}
+        progress={existingInstallProgress}
+        state={existingInstallGateState}
+        onCancel={handleExitInstaller}
+        onConfirm={startExistingInstallUninstall}
+        onRetry={retryExistingInstallGate}
+        t={t}
       />
     );
   }
@@ -3097,6 +3251,139 @@ interface CompleteContentProps {
 interface SetupLauncherProps {
   isOpening: boolean;
   onOpen: () => Promise<void>;
+}
+
+interface ExistingInstallGateProps {
+  details: string[];
+  dialogOpen: boolean;
+  errorMessage: string | null;
+  failures: string[];
+  progress: number;
+  state: ExistingInstallGateState;
+  onCancel: () => void | Promise<void>;
+  onConfirm: () => void | Promise<void>;
+  onRetry: () => void | Promise<void>;
+  t: TFunction;
+}
+
+function ExistingInstallGate({
+  details,
+  dialogOpen,
+  errorMessage,
+  failures,
+  progress,
+  state,
+  onCancel,
+  onConfirm,
+  onRetry,
+  t,
+}: ExistingInstallGateProps) {
+  const isChecking = state === 'checking';
+  const isDetected = state === 'detected';
+  const isUninstalling = state === 'uninstalling';
+  const isError = state === 'error';
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      <TitleBar />
+      <div className="flex flex-1 items-center justify-center p-8">
+        <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-sm">
+          <div className="mb-6 text-center">
+            <div className="mb-4 flex justify-center">
+              {isError ? (
+                <AlertCircle className="h-12 w-12 text-destructive" />
+              ) : isUninstalling ? (
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+              ) : (
+                <AlertCircle className="h-12 w-12 text-primary" />
+              )}
+            </div>
+            <h1 className="mb-2 text-2xl font-semibold">
+              {isChecking && t('existingInstall.checkingTitle')}
+              {isDetected && t('existingInstall.detectedTitle')}
+              {isUninstalling && t('existingInstall.uninstallingTitle')}
+              {isError && t('existingInstall.uninstallFailedTitle')}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {isChecking && t('existingInstall.checkingDescription')}
+              {isDetected && t('existingInstall.detectedDescription')}
+              {isUninstalling && t('existingInstall.uninstallingDescription')}
+              {isError && t('existingInstall.uninstallFailedDescription')}
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {details.length > 0 && (
+              <div className="rounded-lg border bg-muted/40 p-4">
+                <p className="mb-2 text-sm font-medium">{t('existingInstall.detectedItemsTitle')}</p>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  {details.map((detail) => (
+                    <li key={detail} className="break-all">
+                      {detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {isUninstalling && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{t('existingInstall.progress')}</span>
+                  <span className="text-primary">{Math.round(progress)}%</span>
+                </div>
+                <Progress value={progress} className="h-2" />
+              </div>
+            )}
+
+            {isError && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                <p className="font-medium">{errorMessage || t('existingInstall.uninstallFailedDescription')}</p>
+                {failures.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs">
+                    {failures.map((failure) => (
+                      <li key={failure}>{failure}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {isChecking && (
+              <div className="flex items-center justify-center gap-3 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>{t('existingInstall.checkingHint')}</span>
+              </div>
+            )}
+
+            {isError && (
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" onClick={() => void onCancel()}>
+                  {t('existingInstall.exit')}
+                </Button>
+                <Button onClick={() => void onRetry()}>
+                  {t('existingInstall.retry')}
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={dialogOpen}
+        title={t('existingInstall.dialogTitle')}
+        message={t('existingInstall.dialogMessage', {
+          details: details.join('；'),
+        })}
+        confirmLabel={t('existingInstall.confirm')}
+        cancelLabel={t('existingInstall.cancel')}
+        variant="destructive"
+        onConfirm={onConfirm}
+        onCancel={() => void onCancel()}
+      />
+    </div>
+  );
 }
 
 function SetupLauncher({ isOpening, onOpen }: SetupLauncherProps) {

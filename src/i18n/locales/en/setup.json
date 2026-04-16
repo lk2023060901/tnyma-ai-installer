@@ -185,6 +185,27 @@
         "subtitle": "Setup is complete. The setup wizard stays hidden now and this window only opens the bundled TnymaAI web page.",
         "opening": "Opening..."
     },
+    "existingInstall": {
+        "checkingTitle": "Checking for existing OpenClaw-compatible installs",
+        "checkingDescription": "Before setup starts, TnymaAI checks the default install paths, runtime folders, and port 18789.",
+        "checkingHint": "Scanning ~/.openclaw, the default install locations, and the default gateway port…",
+        "detectedTitle": "Existing OpenClaw-compatible product detected",
+        "detectedDescription": "To avoid config and port conflicts, uninstall the existing product before continuing.",
+        "detectedItemsTitle": "Detected install markers",
+        "dialogTitle": "Existing product detected",
+        "dialogMessage": "The following install markers were found: {{details}}. Uninstall them before continuing?",
+        "confirm": "Uninstall and Continue",
+        "cancel": "Cancel and Exit",
+        "progress": "Uninstall Progress",
+        "uninstallingTitle": "Removing existing product",
+        "uninstallingDescription": "TnymaAI is removing the detected OpenClaw-compatible product. Setup will continue automatically when this finishes.",
+        "uninstallFailedTitle": "Uninstall failed",
+        "uninstallFailedDescription": "TnymaAI could not fully remove the detected product. Close related processes and try again, or clean it up manually first.",
+        "retry": "Retry Uninstall",
+        "exit": "Exit Installer",
+        "indicatorPath": "Path: {{value}}",
+        "indicatorPort": "Port: {{value}}"
+    },
     "nav": {
         "next": "Next",
         "back": "Back",
