@@ -10,12 +10,6 @@ import { logger } from '../utils/logger';
 
 const execAsync = promisify(exec);
 const POSIX_INSTALL_ROOTS = ['/opt/TnymaAI', '/opt/OpenClaw'];
-const MAC_APP_BUNDLES = [
-  '/Applications/TnymaAI.app',
-  path.posix.join(homedir(), 'Applications', 'TnymaAI.app'),
-  '/Applications/OpenClaw.app',
-  path.posix.join(homedir(), 'Applications', 'OpenClaw.app'),
-];
 const POSIX_SYMLINKS = ['/usr/local/bin/tnyma-ai', '/usr/local/bin/openclaw'];
 const WINDOWS_PROCESS_IMAGES = ['TnymaAI.exe', 'OpenClaw.exe'];
 const POSIX_PROCESS_NAMES = ['TnymaAI', 'OpenClaw', 'tnyma-ai', 'openclaw-gateway'];
@@ -54,6 +48,15 @@ function getWindowsRoamingAppData(env = process.env, homeDir = homedir()): strin
   return env.APPDATA?.trim() || path.win32.join(homeDir, 'AppData', 'Roaming');
 }
 
+function getMacAppBundles(homeDir: string): string[] {
+  return [
+    '/Applications/TnymaAI.app',
+    path.posix.join(homeDir, 'Applications', 'TnymaAI.app'),
+    '/Applications/OpenClaw.app',
+    path.posix.join(homeDir, 'Applications', 'OpenClaw.app'),
+  ];
+}
+
 function joinForPlatform(platform: NodeJS.Platform, ...segments: string[]): string {
   if (platform === 'win32') {
     return path.win32.join(...segments);
@@ -74,7 +77,7 @@ export function getInstalledProductCandidatePaths(
   if (platform === 'darwin') {
     return uniquePaths([
       ...commonPaths,
-      ...MAC_APP_BUNDLES,
+      ...getMacAppBundles(homeDir),
       joinForPlatform(platform, homeDir, 'Library', 'Application Support', 'TnymaAI'),
       joinForPlatform(platform, homeDir, 'Library', 'Application Support', 'OpenClaw'),
       joinForPlatform(platform, homeDir, 'Library', 'Application Support', 'openclaw-office-installer'),
