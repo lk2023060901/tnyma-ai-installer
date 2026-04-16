@@ -372,7 +372,7 @@ This repo now includes a local GitLab CI/CD scaffold for the `tnyma-ai` + `tnyma
 
 The pipeline treats the `openclaw` npm package as the runtime source of truth and expects `tnyma-ai` to be bundled into the installer as compiled runtime artifacts.
 For tag pipelines, GitLab CI also publishes a GitLab Release page with generated changelog notes and permanent installer download links for macOS, Windows, and Linux assets.
-Tag pipelines now also enforce immutable `TNYMA_AI_REF` inputs, validate macOS notarization, and can optionally notify Feishu build/release bots.
+Tag pipelines now also enforce immutable `TNYMA_AI_REF` inputs, validate macOS notarization, and can optionally notify Feishu build/release bots. On the macOS runner, notarization can use a saved `notarytool` keychain profile through `package-mac.sh`.
 
 ### Communication Regression Checks
 

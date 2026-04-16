@@ -6,6 +6,14 @@ if [[ "${CI_COMMIT_TAG:-}" == "" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+if [[ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]]; then
+  if [[ -z "${APPLE_KEYCHAIN:-}" ]]; then
+    export APPLE_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
+  fi
+  echo "prepare-macos-notarization: using notarytool keychain profile ${APPLE_KEYCHAIN_PROFILE}"
+  return 0 2>/dev/null || exit 0
+fi
+
 if [[ -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}" ]]; then
   echo "prepare-macos-notarization: using existing APPLE_API_KEY path"
   return 0 2>/dev/null || exit 0
@@ -29,5 +37,5 @@ if [[ -n "${KEY_B64}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}
 fi
 
 echo "prepare-macos-notarization: missing notarization credentials for tag release." >&2
-echo "Provide either APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, APPLE_API_KEY_BASE64 + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID." >&2
+echo "Provide either APPLE_KEYCHAIN_PROFILE (optionally with APPLE_KEYCHAIN), APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, APPLE_API_KEY_BASE64 + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID." >&2
 return 1 2>/dev/null || exit 1

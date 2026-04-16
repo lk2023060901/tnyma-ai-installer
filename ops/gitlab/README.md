@@ -183,9 +183,12 @@ If `*_CHAT_ID` is not set, the notifier tries to resolve the target by chat name
 
 For tag releases, `package:mac` now requires notarization credentials. Supported credential layouts:
 
+- `APPLE_KEYCHAIN_PROFILE` (optionally with `APPLE_KEYCHAIN`) for a macOS runner that already has a saved `notarytool` profile
 - `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`
 - `APPLE_API_KEY_BASE64` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`
 - `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`
+
+On this workstation, the `macos` runner delegates to [`package-mac.sh`](../../package-mac.sh), which can load the local signing environment and submit DMGs with `xcrun notarytool`.
 
 After packaging, the job validates:
 

@@ -104,8 +104,7 @@ package:mac:
   tags:
     - macos
   script:
-    - . scripts/ci/prepare-macos-notarization.sh
-    - pnpm run package:mac
+    - bash package-mac.sh
     - bash scripts/ci/verify-macos-notarization.sh
   artifacts:
     when: always
