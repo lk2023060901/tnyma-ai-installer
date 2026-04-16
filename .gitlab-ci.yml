@@ -23,25 +23,23 @@ variables:
   TNYMA_AI_CHECKOUT_DIR: "$CI_PROJECT_DIR/.ci/tnyma-ai"
   SKIP_OPENCLAW_NPM_VERIFY: "0"
 
-notify:build:success:feishu:
-  stage: announce
+notify:build:failure:feishu:
+  stage: notify
   image: node:20-bookworm
   tags:
     - docker
   allow_failure: true
-  needs:
-    - job: package:mac
-      artifacts: false
-    - job: package:win
-      artifacts: false
-    - job: package:linux
-      artifacts: false
+  dependencies: []
   script:
-    - node scripts/ci/notify-feishu.mjs build-success
+    - node scripts/ci/notify-feishu.mjs build-failure
+  when: on_failure
   rules:
     - if: $CI_COMMIT_TAG
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
+      when: on_failure
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: on_failure
+    - if: $CI_COMMIT_BRANCH
+      when: on_failure
     - when: never
 
 .setup_posix:
@@ -214,6 +212,9 @@ notify:release:failure:feishu:
     - docker
   allow_failure: true
   dependencies: []
+  needs:
+    - job: release:gitlab
+      optional: true
   script:
     - node scripts/ci/notify-feishu.mjs release-failure
   when: on_failure

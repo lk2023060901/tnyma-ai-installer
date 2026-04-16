@@ -12,7 +12,7 @@ const FEISHU_OPEN_BASE_URL = 'https://open.feishu.cn';
 const FEISHU_IM_API_BASE_URL = `${FEISHU_OPEN_BASE_URL}/open-apis/im/v1`;
 const FEISHU_TENANT_ACCESS_TOKEN_URL = `${FEISHU_OPEN_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal`;
 
-const mode = (process.argv[2] || 'build-success').trim().toLowerCase();
+const mode = (process.argv[2] || 'build-failure').trim().toLowerCase();
 
 function loadJson(targetPath) {
   try {
@@ -228,6 +228,44 @@ function buildBuildSuccessMessage(metadata, jobSummary) {
   return lines.join('\n');
 }
 
+function buildBuildFailureMessage(metadata, jobSummary) {
+  const lines = [
+    'TnymaAI 版本构建失败',
+    `版本: ${process.env.CI_COMMIT_TAG || packageJsonVersion()}`,
+    `流水线: ${process.env.CI_PIPELINE_URL || 'unknown'}`,
+  ];
+
+  if (metadata?.TnymaAI?.version) {
+    lines.push(`OpenClaw: ${metadata.TnymaAI.version}`);
+  }
+
+  if (metadata?.tnymaAi?.revision) {
+    lines.push(`tnyma-ai: ${metadata.tnymaAi.revision.slice(0, 8)}`);
+  }
+
+  const failingJobs = getBuildFailingJobs(jobSummary);
+  if (failingJobs.length > 0) {
+    lines.push('', '失败任务:');
+    for (const job of failingJobs.slice(0, 8)) {
+      const suffix = job.url ? ` ${job.url}` : '';
+      lines.push(`- ${job.name}=${job.status}${suffix}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function getBuildFailingJobs(jobSummary) {
+  return jobSummary.filter((job) =>
+    ['verify:installer', 'bundle:services', 'package:mac', 'package:win', 'package:linux'].includes(job.name) &&
+    ['failed', 'canceled'].includes(job.status),
+  );
+}
+
+function hasReleaseFailure(jobSummary) {
+  return jobSummary.some((job) => job.name === 'release:gitlab' && ['failed', 'canceled'].includes(job.status));
+}
+
 function buildReleaseSuccessMessage(metadata, jobSummary) {
   const lines = [
     'TnymaAI 版本发布成功',
@@ -317,9 +355,19 @@ async function main() {
 
   if (mode === 'build-success') {
     content = buildBuildSuccessMessage(metadata, jobSummary);
+  } else if (mode === 'build-failure') {
+    if (getBuildFailingJobs(jobSummary).length === 0) {
+      console.log('No failed verify/bundle/package jobs found, skipping build-failure notification.');
+      return;
+    }
+    content = buildBuildFailureMessage(metadata, jobSummary);
   } else if (mode === 'release-success') {
     content = buildReleaseSuccessMessage(metadata, jobSummary);
   } else if (mode === 'release-failure') {
+    if (!hasReleaseFailure(jobSummary)) {
+      console.log('release:gitlab did not fail, skipping release-failure notification.');
+      return;
+    }
     content = buildReleaseFailureMessage(metadata, jobSummary);
   } else {
     throw new Error(`Unsupported Feishu notification mode: ${mode}`);
