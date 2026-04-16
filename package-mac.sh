@@ -178,6 +178,17 @@ resolve_dmg_codesign_identity() {
   esac
 }
 
+resolve_electron_builder_csc_name() {
+  case "${CSC_NAME}" in
+    Developer\ ID\ Application:\ *)
+      printf '%s\n' "${CSC_NAME#Developer ID Application: }"
+      ;;
+    *)
+      printf '%s\n' "${CSC_NAME}"
+      ;;
+  esac
+}
+
 validate_app_bundle() {
   label="$1"
   app_path="$2"
@@ -257,6 +268,7 @@ require_signing_env
 
 VERSION="$(node -p "require('./package.json').version")"
 DMG_CODESIGN_IDENTITY="$(resolve_dmg_codesign_identity)"
+ELECTRON_BUILDER_CSC_NAME="$(resolve_electron_builder_csc_name)"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tnymaai-mac-package.XXXXXX")"
 
 cleanup() {
@@ -270,6 +282,7 @@ trap cleanup EXIT INT TERM
 echo "==> [$(timestamp)] Starting macOS packaging workflow"
 echo "==> [$(timestamp)] Version: ${VERSION}"
 echo "==> [$(timestamp)] Using dmg signing identity: ${DMG_CODESIGN_IDENTITY}"
+echo "==> [$(timestamp)] Using electron-builder signing name: ${ELECTRON_BUILDER_CSC_NAME}"
 echo "==> [$(timestamp)] Stopping stale packaging processes"
 pkill -f 'electron-builder|app-builder|pnpm.*package' >/dev/null 2>&1 || true
 sleep 1
@@ -291,11 +304,11 @@ rm -rf release/github
 run_step "Rebuilding app bundles" pnpm run package
 
 echo "==> [$(timestamp)] Building x64 artifacts via electron-builder"
-run_step "Building macOS DMG (x64)" pnpm exec electron-builder --mac dmg --x64 --publish never
-run_step "Building macOS ZIP (x64)" pnpm exec electron-builder --mac zip --x64 --publish never
+run_step "Building macOS DMG (x64)" env CSC_NAME="${ELECTRON_BUILDER_CSC_NAME}" pnpm exec electron-builder --mac dmg --x64 --publish never
+run_step "Building macOS ZIP (x64)" env CSC_NAME="${ELECTRON_BUILDER_CSC_NAME}" pnpm exec electron-builder --mac zip --x64 --publish never
 echo "==> [$(timestamp)] Building arm64 artifacts via electron-builder"
-run_step "Building macOS DMG (arm64)" pnpm exec electron-builder --mac dmg --arm64 --publish never
-run_step "Building macOS ZIP (arm64)" pnpm exec electron-builder --mac zip --arm64 --publish never
+run_step "Building macOS DMG (arm64)" env CSC_NAME="${ELECTRON_BUILDER_CSC_NAME}" pnpm exec electron-builder --mac dmg --arm64 --publish never
+run_step "Building macOS ZIP (arm64)" env CSC_NAME="${ELECTRON_BUILDER_CSC_NAME}" pnpm exec electron-builder --mac zip --arm64 --publish never
 
 for artifact in \
   "release/TnymaAI-${VERSION}-mac-x64.dmg" \
