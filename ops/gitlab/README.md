@@ -176,6 +176,9 @@ Recommended CI/CD variables:
 - `FEISHU_RELEASE_BOT_APP_ID`
 - `FEISHU_RELEASE_BOT_APP_SECRET`
 - `FEISHU_RELEASE_BOT_CHAT_ID` or `FEISHU_RELEASE_BOT_CHAT_NAME`
+- `CSC_NAME`
+- `APPLE_KEYCHAIN_PROFILE`
+- `APPLE_KEYCHAIN` (optional; defaults to the macOS login keychain on the runner)
 
 If `*_CHAT_ID` is not set, the notifier tries to resolve the target by chat name. If no chat name is set either, it falls back to auto-selecting the only chat visible to that bot.
 
@@ -190,6 +193,8 @@ For tag releases, `package:mac` now requires notarization credentials. Supported
 - `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`
 
 On this workstation, the `macos` runner delegates to [`package-mac.sh`](../../package-mac.sh), which now only reads signing settings from explicit environment variables or from the env file path pointed to by `TNYMAAI_MAC_SIGNING_ENV`, then submits DMGs with `xcrun notarytool`.
+
+For the current internal GitLab setup, prefer storing `CSC_NAME`, `APPLE_KEYCHAIN_PROFILE`, and optionally `APPLE_KEYCHAIN` directly as project CI/CD variables instead of pointing `TNYMAAI_MAC_SIGNING_ENV` at a local file path.
 
 After packaging, the job validates:
 

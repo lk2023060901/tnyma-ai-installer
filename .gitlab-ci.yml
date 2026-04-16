@@ -103,6 +103,7 @@ package:mac:
   extends: .setup_posix
   tags:
     - macos
+  timeout: 3h
   script:
     - bash package-mac.sh
     - bash scripts/ci/verify-macos-notarization.sh
@@ -212,6 +213,7 @@ notify:release:failure:feishu:
   tags:
     - docker
   allow_failure: true
+  dependencies: []
   script:
     - node scripts/ci/notify-feishu.mjs release-failure
   when: on_failure
