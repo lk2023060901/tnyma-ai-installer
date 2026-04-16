@@ -12,7 +12,9 @@ stages:
   - verify
   - bundle
   - package
+  - announce
   - release
+  - notify
 
 variables:
   GIT_DEPTH: "1"
@@ -20,6 +22,27 @@ variables:
   TNYMA_AI_REF: "main"
   TNYMA_AI_CHECKOUT_DIR: "$CI_PROJECT_DIR/.ci/tnyma-ai"
   SKIP_OPENCLAW_NPM_VERIFY: "0"
+
+notify:build:success:feishu:
+  stage: announce
+  image: node:20-bookworm
+  tags:
+    - docker
+  allow_failure: true
+  needs:
+    - job: package:mac
+      artifacts: false
+    - job: package:win
+      artifacts: false
+    - job: package:linux
+      artifacts: false
+  script:
+    - node scripts/ci/notify-feishu.mjs build-success
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - when: never
 
 .setup_posix:
   before_script:
@@ -55,6 +78,7 @@ verify:installer:
   tags:
     - docker
   script:
+    - node scripts/ci/verify-release-inputs.mjs
     - node scripts/ci/verify-openclaw-version.mjs
     - pnpm run typecheck
     - pnpm test
@@ -80,12 +104,17 @@ package:mac:
   tags:
     - macos
   script:
+    - . scripts/ci/prepare-macos-notarization.sh
     - pnpm run package:mac
+    - bash scripts/ci/verify-macos-notarization.sh
   artifacts:
     when: always
+    expire_in: 14 days
     paths:
       - release/*.dmg
       - release/*.zip
+      - release/*.blockmap
+      - release/latest*.yml
       - build/build-metadata.json
   rules:
     - if: $CI_COMMIT_TAG
@@ -102,8 +131,11 @@ package:win:
     - pnpm run package:win
   artifacts:
     when: always
+    expire_in: 14 days
     paths:
       - release/*.exe
+      - release/*.blockmap
+      - release/latest*.yml
       - build/build-metadata.json
   rules:
     - if: $CI_COMMIT_TAG
@@ -120,10 +152,12 @@ package:linux:
     - pnpm run package:linux
   artifacts:
     when: always
+    expire_in: 14 days
     paths:
       - release/*.AppImage
       - release/*.deb
       - release/*.rpm
+      - release/latest*.yml
       - build/build-metadata.json
   rules:
     - if: $CI_COMMIT_TAG
@@ -133,9 +167,11 @@ package:linux:
 
 release:gitlab:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: node:20-bookworm
   tags:
     - docker
+  variables:
+    GIT_DEPTH: "0"
   needs:
     - job: package:mac
       artifacts: true
@@ -144,15 +180,43 @@ release:gitlab:
     - job: package:linux
       artifacts: true
   script:
-    - echo "Creating GitLab release for ${CI_COMMIT_TAG}"
-  release:
-    tag_name: $CI_COMMIT_TAG
-    name: TnymaAI $CI_COMMIT_TAG
-    description: |
-      Cross-platform TnymaAI installer release.
-
-      - The packaged TnymaAI runtime version is recorded in `build/build-metadata.json`
-      - Download artifacts from the package jobs attached to this pipeline
+    - apt-get update
+    - apt-get install -y --no-install-recommends git ca-certificates
+    - node scripts/ci/publish-gitlab-release.mjs
+  artifacts:
+    when: always
+    expire_in: 180 days
+    paths:
+      - build/release-notes.md
   rules:
     - if: $CI_COMMIT_TAG
+    - when: never
+
+notify:release:success:feishu:
+  stage: notify
+  image: node:20-bookworm
+  tags:
+    - docker
+  allow_failure: true
+  needs:
+    - job: release:gitlab
+      artifacts: true
+  script:
+    - node scripts/ci/notify-feishu.mjs release-success
+  rules:
+    - if: $CI_COMMIT_TAG
+    - when: never
+
+notify:release:failure:feishu:
+  stage: notify
+  image: node:20-bookworm
+  tags:
+    - docker
+  allow_failure: true
+  script:
+    - node scripts/ci/notify-feishu.mjs release-failure
+  when: on_failure
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: on_failure
     - when: never

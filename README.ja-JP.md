@@ -366,6 +366,8 @@ pnpm run cleanup:installed:mac -- --yes  # インストール済み macOS アプ
 - `tnyma-ai` 用スターターテンプレート: `ops/gitlab/templates/tnyma-ai.gitlab-ci.yml`
 
 このパイプラインは npm 上の `openclaw` パッケージをランタイムの正本として扱い、`tnyma-ai` はコンパイル済みランタイム成果物としてインストーラーに同梱される前提です。
+タグ付きパイプラインでは、GitLab CI が自動で GitLab Release ページも公開し、生成された変更履歴と macOS / Windows / Linux インストーラーの恒久的なダウンロードリンクを掲載します。
+タグ付きパイプラインではさらに、`TNYMA_AI_REF` を不変参照に固定し、macOS の notarization を検証し、任意で Feishu のビルド/リリース通知ボットにも送信できます。
 
 ### 通信回帰チェック
 

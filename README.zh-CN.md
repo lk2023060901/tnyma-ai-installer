@@ -370,6 +370,8 @@ pnpm run cleanup:installed:mac -- --yes  # 清理已安装的 macOS 应用数据
 - `tnyma-ai` 仓库起步模板：`ops/gitlab/templates/tnyma-ai.gitlab-ci.yml`
 
 流水线默认以 npm 上的 `openclaw` 包作为运行时真源，并要求 `tnyma-ai` 以编译后的运行时产物形式打入安装包。
+对于 tag 流水线，GitLab CI 还会自动发布一个 GitLab Release 页面，附带自动生成的变更记录，以及 macOS、Windows、Linux 安装包的长期下载链接。
+tag 流水线现在还会校验 `TNYMA_AI_REF` 必须是不可变版本、验证 macOS 公证结果，并可选接入飞书构建/发布机器人通知。
 
 ### 通信回归检查
 

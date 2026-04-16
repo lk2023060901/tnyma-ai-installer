@@ -33,6 +33,13 @@ cd ops/gitlab
 
 The script applies `default_preferred_language=zh_CN` to the instance and also updates the root user's preferred language.
 
+To create a manual GitLab backup snapshot:
+
+```bash
+cd ops/gitlab
+./backup.sh
+```
+
 ## 2. Import the two repositories
 
 Create a GitLab group for your local deployment, then import:
@@ -54,6 +61,8 @@ Optional variables:
 
 - `TNYMA_AI_REF=main`
 - `SKIP_OPENCLAW_NPM_VERIFY=0`
+
+For tag releases, set `TNYMA_AI_REF` to an immutable commit SHA or tag instead of `main`.
 
 ## 3. Register runners
 
@@ -127,12 +136,62 @@ Set runner-local prerequisites:
 
 The installer repo `.gitlab-ci.yml` is designed as follows:
 
+- `notify:build:feishu` as a non-blocking build notification job
 - `verify:installer` on the `docker` runner
 - `bundle:services` on the `docker` runner
 - `package:mac` on the `macos` runner
 - `package:win` on the `windows` runner
 - `package:linux` on the `linux` runner
 - `release:gitlab` on tags
+- `notify:release:feishu` as a non-blocking release notification job
+
+On tag pipelines, `release:gitlab` now:
+
+- uploads the packaged installers into the GitLab Generic Package Registry
+- creates or updates a GitLab Release page for that tag
+- attaches permanent release download links under the release asset list
+- generates release notes from the commits between the previous tag and the current tag
+
+The resulting release page behaves more like a GitHub Releases page: each version has a changelog plus stable per-file download URLs.
+
+Tag pipelines also enforce release inputs:
+
+- the Git tag must match `package.json.version`
+- `TNYMA_AI_REF` must be a commit SHA or version tag, not a floating branch
+- `package:mac` must have valid notarization credentials
+- package artifacts expire after `14 days`, while release notes stay for `180 days`
+
+### Feishu CI notifications
+
+The pipeline supports two optional Feishu bots:
+
+- build bot: sends a message after cross-platform packaging succeeds
+- release bot: sends a success message with the GitLab Release page and download links, and also sends a failure message when a tag release pipeline fails
+
+Recommended CI/CD variables:
+
+- `FEISHU_BUILD_BOT_APP_ID`
+- `FEISHU_BUILD_BOT_APP_SECRET`
+- `FEISHU_BUILD_BOT_CHAT_ID` or `FEISHU_BUILD_BOT_CHAT_NAME`
+- `FEISHU_RELEASE_BOT_APP_ID`
+- `FEISHU_RELEASE_BOT_APP_SECRET`
+- `FEISHU_RELEASE_BOT_CHAT_ID` or `FEISHU_RELEASE_BOT_CHAT_NAME`
+
+If `*_CHAT_ID` is not set, the notifier tries to resolve the target by chat name. If no chat name is set either, it falls back to auto-selecting the only chat visible to that bot.
+
+### macOS notarization in CI
+
+For tag releases, `package:mac` now requires notarization credentials. Supported credential layouts:
+
+- `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`
+- `APPLE_API_KEY_BASE64` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`
+- `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`
+
+After packaging, the job validates:
+
+- `codesign --verify --deep --strict`
+- `spctl --assess`
+- `xcrun stapler validate`
 
 Packaging jobs resolve `tnyma-ai` from either:
 
