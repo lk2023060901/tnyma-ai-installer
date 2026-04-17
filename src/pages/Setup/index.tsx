@@ -218,14 +218,6 @@ async function fetchControlUiUrl(): Promise<string> {
   return result.url;
 }
 
-type GatewayServiceInstallResponse = {
-  success: boolean;
-  skipped?: boolean;
-  alreadyInstalled?: boolean;
-  loaded?: boolean;
-  error?: string;
-};
-
 async function waitForControlUiUrl(retries = CONTROL_UI_POLL_RETRIES): Promise<string> {
   await waitForGatewayReady({ startIfNeeded: false });
   let lastError: unknown = null;
@@ -260,26 +252,8 @@ async function ensureGatewayRunning(): Promise<void> {
   }
 }
 
-async function ensureGatewayServiceInstalled(forceRefresh = false): Promise<void> {
-  const result = await hostApiFetch<GatewayServiceInstallResponse>('/api/app/gateway-service/install', {
-    method: 'POST',
-    body: JSON.stringify({ forceRefresh }),
-  });
-
-  if (!result.success) {
-    throw new Error(result.error || 'Failed to install OpenClaw gateway LaunchAgent');
-  }
-}
-
-function ensureGatewayServiceInstalledInBackground(forceRefresh = false): void {
-  void ensureGatewayServiceInstalled(forceRefresh).catch((error) => {
-    console.warn('Failed to install OpenClaw gateway LaunchAgent in background:', error);
-  });
-}
-
 async function prepareGatewayControlUi(): Promise<string> {
   await persistBackgroundGatewayStartupSettings();
-  ensureGatewayServiceInstalledInBackground(false);
   await ensureGatewayRunning();
   return await waitForControlUiUrl();
 }
@@ -1501,9 +1475,10 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
     const ensureGatewayReadyAfterProviderSave = async (
       accountId: string,
       authMode: ProviderAccount['authMode'] | undefined,
+      vendorId: ProviderAccount['vendorId'] | undefined,
       defaultModelId?: string,
     ): Promise<void> => {
-      if (!supportsProviderModelCatalog(authMode ? { authMode } : null)) {
+      if (!supportsProviderModelCatalog(authMode && vendorId ? { authMode, vendorId } : null)) {
         return;
       }
 
@@ -1538,6 +1513,7 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
         await ensureGatewayReadyAfterProviderSave(
           accountIdForOauthSync,
           activeAccount?.authMode ?? selectedChoice.authMode,
+          activeAccount?.vendorId ?? selectedChoice.vendorId,
           selectedChoice.defaultModelId,
         );
         return true;
@@ -1673,6 +1649,7 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       await ensureGatewayReadyAfterProviderSave(
         accountIdForSave,
         accountPayload.authMode,
+        accountPayload.vendorId,
         selectedChoice.defaultModelId,
       );
       toast.success(t('provider.valid'));

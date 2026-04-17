@@ -126,10 +126,26 @@ function parseDirectModelCatalog(
 function sortProviderModels(
   models: ProviderModelCatalogEntry[],
 ): ProviderModelCatalogEntry[] {
-  models.sort((left, right) =>
+  const deduped = new Map<string, ProviderModelCatalogEntry>();
+  for (const model of models) {
+    const normalizedId = model.id.trim();
+    if (!normalizedId) {
+      continue;
+    }
+    if (!deduped.has(normalizedId)) {
+      deduped.set(normalizedId, {
+        ...model,
+        id: normalizedId,
+        name: model.name?.trim() || normalizedId,
+      });
+    }
+  }
+
+  const sorted = [...deduped.values()];
+  sorted.sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) || left.id.localeCompare(right.id),
   );
-  return models;
+  return sorted;
 }
 
 function mergeProviderModelCatalogs(

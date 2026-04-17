@@ -101,6 +101,35 @@ describe('provider-model-catalog', () => {
     ]);
   });
 
+  it('deduplicates oauth browser models that arrive under multiple provider aliases', async () => {
+    mocks.getProviderAccount.mockResolvedValue({
+      id: 'acct-openai',
+      vendorId: 'openai',
+      authMode: 'oauth_browser',
+      metadata: {},
+    });
+
+    const gateway = createGatewayRpc([
+      {
+        models: [
+          { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', provider: 'openai' },
+          { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', provider: 'openai-codex' },
+          { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'openai-codex' },
+        ],
+      },
+    ]);
+
+    const models = await listProviderModels(gateway as GatewayManager, 'acct-openai', {
+      retries: 1,
+      delayMs: 0,
+    });
+
+    expect(models).toEqual([
+      { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', provider: 'openai-codex' },
+      { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'openai-codex' },
+    ]);
+  });
+
   it('falls back to direct /models fetch for custom openai-compatible providers when gateway catalog is empty', async () => {
     mocks.getProviderAccount.mockResolvedValue({
       id: 'custom-12345678',

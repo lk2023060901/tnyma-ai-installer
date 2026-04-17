@@ -65,34 +65,8 @@ async function ensureGatewayRunning(): Promise<void> {
   }
 }
 
-type GatewayServiceInstallResponse = {
-  success: boolean;
-  skipped?: boolean;
-  alreadyInstalled?: boolean;
-  loaded?: boolean;
-  error?: string;
-};
-
-async function ensureGatewayServiceInstalled(forceRefresh = false): Promise<void> {
-  const result = await hostApiFetch<GatewayServiceInstallResponse>('/api/app/gateway-service/install', {
-    method: 'POST',
-    body: JSON.stringify({ forceRefresh }),
-  });
-
-  if (!result.success) {
-    throw new Error(result.error || 'Failed to install OpenClaw gateway LaunchAgent');
-  }
-}
-
-function ensureGatewayServiceInstalledInBackground(forceRefresh = false): void {
-  void ensureGatewayServiceInstalled(forceRefresh).catch((error) => {
-    console.warn('Failed to install OpenClaw gateway LaunchAgent in background:', error);
-  });
-}
-
 async function prepareGatewayControlUi(): Promise<string> {
   await persistBackgroundGatewayStartupSettings();
-  ensureGatewayServiceInstalledInBackground(false);
   await ensureGatewayRunning();
   return await waitForControlUiUrl();
 }

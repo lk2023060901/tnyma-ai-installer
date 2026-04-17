@@ -15,21 +15,37 @@ const PROVIDER_MODELS_HEALTH_RETRIES = 10;
 const PROVIDER_MODELS_HEALTH_DELAY_MS = 800;
 const PROVIDER_MODELS_FETCH_RETRIES = 8;
 const PROVIDER_MODELS_FETCH_WAIT_TIMEOUT_MS = 10_000;
+const OAUTH_PROVIDER_MODEL_CATALOG_VENDOR_IDS = new Set([
+  'google',
+  'openai',
+]);
 
 export function supportsProviderModelCatalog(
-  account: Pick<ProviderAccount, 'authMode'> | null | undefined,
+  account: Pick<ProviderAccount, 'authMode' | 'vendorId' | 'metadata'> | null | undefined,
 ): boolean {
-  return account?.authMode !== 'oauth_browser';
+  if (!account) {
+    return false;
+  }
+
+  if (account.authMode !== 'oauth_browser') {
+    return true;
+  }
+
+  if (account.metadata?.modelProviderKey?.trim()) {
+    return true;
+  }
+
+  return OAUTH_PROVIDER_MODEL_CATALOG_VENDOR_IDS.has(account.vendorId);
 }
 
 export function requiresManualProviderModelEntry(
-  account: Pick<ProviderAccount, 'authMode'> | null | undefined,
+  account: Pick<ProviderAccount, 'authMode' | 'vendorId' | 'metadata'> | null | undefined,
 ): boolean {
   return !supportsProviderModelCatalog(account);
 }
 
 export function getStoredProviderModels(
-  account: Pick<ProviderAccount, 'authMode' | 'metadata'> | null | undefined,
+  account: Pick<ProviderAccount, 'authMode' | 'vendorId' | 'metadata'> | null | undefined,
 ): ProviderModelCatalogEntry[] {
   if (!supportsProviderModelCatalog(account)) {
     return [];
