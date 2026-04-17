@@ -200,7 +200,11 @@ async function awaitFeishuAutoCreate(
           enabled: true,
         }, accountId);
         await ensureScopedChannelBinding('feishu', accountId);
-        scheduleGatewayChannelSaveRefresh(ctx, 'feishu', `feishu:autoCreate:${accountId || 'default'}`);
+        await ensureGatewayReadyAfterQrProvisioning(
+          ctx,
+          'feishu',
+          `feishu:autoCreate:${accountId || 'default'}`,
+        );
       },
       onProgress: async (payload) => {
         if (!isActiveQrLogin(loginKey, sessionKey)) {
@@ -259,7 +263,11 @@ async function awaitQQBotAutoCreate(
           enabled: true,
         }, accountId);
         await ensureScopedChannelBinding('qqbot', accountId);
-        scheduleGatewayChannelSaveRefresh(ctx, 'qqbot', `qqbot:autoCreate:${accountId || 'default'}`);
+        await ensureGatewayReadyAfterQrProvisioning(
+          ctx,
+          'qqbot',
+          `qqbot:autoCreate:${accountId || 'default'}`,
+        );
       },
       onProgress: async (payload) => {
         if (!isActiveQrLogin(loginKey, sessionKey)) {
@@ -303,6 +311,43 @@ function scheduleGatewayChannelRestart(ctx: HostApiContext, reason: string): voi
 // initialize / tear-down plugin connections.  SIGUSR1 in-process reload is
 // not sufficient for channel plugins (see restartGatewayForAgentDeletion).
 const FORCE_RESTART_CHANNELS = new Set(['dingtalk', 'wecom', 'whatsapp', 'feishu', 'qqbot', OPENCLAW_WECHAT_CHANNEL_TYPE]);
+
+async function ensureGatewayReadyAfterQrProvisioning(
+  ctx: HostApiContext,
+  channelType: string,
+  reason: string,
+): Promise<void> {
+  const storedChannelType = resolveStoredChannelType(channelType);
+  if (ctx.gatewayManager.getStatus().state === 'stopped') {
+    return;
+  }
+
+  const maxAttempts = 2;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (FORCE_RESTART_CHANNELS.has(storedChannelType)) {
+        await ctx.gatewayManager.restart();
+      } else {
+        await ctx.gatewayManager.reload();
+      }
+
+      await ctx.gatewayManager.waitUntilStable({ timeoutMs: 90_000, intervalMs: 500 });
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
+    }
+  }
+
+  throw new Error(
+    `${channelType} provisioning succeeded but Gateway did not become ready: ${lastError?.message || reason}`,
+    { cause: lastError ?? undefined },
+  );
+}
 
 function scheduleGatewayChannelSaveRefresh(
   ctx: HostApiContext,

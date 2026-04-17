@@ -174,7 +174,13 @@ export const useSettingsStore = create<SettingsState>()(
           body: JSON.stringify({ value: devModeUnlocked }),
         }).catch(() => { });
       },
-      markSetupComplete: () => set({ setupComplete: true }),
+      markSetupComplete: () => {
+        set({ setupComplete: true });
+        void hostApiFetch('/api/settings/setupComplete', {
+          method: 'PUT',
+          body: JSON.stringify({ value: true }),
+        }).catch(() => { });
+      },
       resetSettings: () => set(defaultSettings),
     }),
     {

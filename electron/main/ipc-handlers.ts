@@ -105,7 +105,7 @@ export function registerIpcHandlers(
   registerSessionHandlers();
 
   // App handlers
-  registerAppHandlers();
+  registerAppHandlers(mainWindow);
 
   // Settings handlers
   registerSettingsHandlers(gatewayManager);
@@ -1988,7 +1988,7 @@ function registerDialogHandlers(): void {
 /**
  * App-related IPC handlers
  */
-function registerAppHandlers(): void {
+function registerAppHandlers(mainWindow: BrowserWindow): void {
   // Get app version
   ipcMain.handle('app:version', () => {
     return app.getVersion();
@@ -2018,6 +2018,38 @@ function registerAppHandlers(): void {
   ipcMain.handle('app:relaunch', () => {
     app.relaunch();
     app.quit();
+  });
+
+  ipcMain.handle('app:proceedToSetup', () => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.setMaximumSize(10000, 10000);
+      mainWindow.setMinimumSize(960, 600);
+      mainWindow.setResizable(true);
+      mainWindow.setContentSize(1280, 800, true);
+      mainWindow.center();
+      mainWindow.webContents.send('navigate', '/');
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    return { success: true };
+  });
+
+  ipcMain.handle('app:proceedAfterExistingInstall', async () => {
+    const setupComplete = await getSetting('setupComplete');
+    const destination = setupComplete ? '/launcher' : '/';
+
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.setMaximumSize(10000, 10000);
+      mainWindow.setMinimumSize(960, 600);
+      mainWindow.setResizable(true);
+      mainWindow.setContentSize(1280, 800, true);
+      mainWindow.center();
+      mainWindow.webContents.send('navigate', destination);
+      mainWindow.show();
+      mainWindow.focus();
+    }
+
+    return { success: true, destination };
   });
 }
 
@@ -2121,6 +2153,50 @@ function registerWindowHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('window:isMaximized', () => {
     return mainWindow.isMaximized();
   });
+
+  ipcMain.handle(
+    'window:setContentSize',
+    (_, payload: { width?: number; height?: number; resizable?: boolean } | undefined) => {
+      const width = typeof payload?.width === 'number' ? Math.max(Math.floor(payload.width), 360) : null;
+      const height = typeof payload?.height === 'number' ? Math.max(Math.floor(payload.height), 220) : null;
+      const resizable = typeof payload?.resizable === 'boolean' ? payload.resizable : null;
+      const defaultMinWidth = 960;
+      const defaultMinHeight = 600;
+      const unlockedMaxSize = 10000;
+
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+      }
+
+      if (width !== null && height !== null) {
+        if (resizable === false) {
+          mainWindow.setMaximumSize(width, height);
+          mainWindow.setMinimumSize(width, height);
+          mainWindow.setResizable(false);
+        } else {
+          mainWindow.setMaximumSize(unlockedMaxSize, unlockedMaxSize);
+          mainWindow.setMinimumSize(defaultMinWidth, defaultMinHeight);
+          if (resizable !== null) {
+            mainWindow.setResizable(resizable);
+          }
+        }
+        mainWindow.setContentSize(width, height, true);
+        mainWindow.center();
+      } else if (resizable !== null) {
+        if (resizable) {
+          mainWindow.setMaximumSize(unlockedMaxSize, unlockedMaxSize);
+          mainWindow.setMinimumSize(defaultMinWidth, defaultMinHeight);
+        }
+        mainWindow.setResizable(resizable);
+      }
+
+      return {
+        width: mainWindow.getContentBounds().width,
+        height: mainWindow.getContentBounds().height,
+        resizable: mainWindow.isResizable(),
+      };
+    },
+  );
 }
 
 // ── Mime type helpers ────────────────────────────────────────────

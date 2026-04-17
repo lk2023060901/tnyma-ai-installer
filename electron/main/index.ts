@@ -120,6 +120,7 @@ let installerWebStackManager!: InstallerWebStackManager;
 const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
 const backgroundLaunchRequested = isBackgroundLaunchRequested();
+type MainWindowRoute = 'setup' | 'existing-install';
 
 /**
  * Resolve the icons directory path (works in both dev and packaged mode)
@@ -151,16 +152,29 @@ function getAppIcon(): Electron.NativeImage | undefined {
 /**
  * Create the main application window
  */
-function createWindow(): BrowserWindow {
+function loadAppWindow(win: BrowserWindow, route: MainWindowRoute): void {
+  const hash = route === 'existing-install' ? '/existing-install' : '/';
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    win.loadURL(`${process.env.VITE_DEV_SERVER_URL}#${hash}`);
+    win.webContents.openDevTools();
+    return;
+  }
+
+  void win.loadFile(join(__dirname, '../../dist/index.html'), { hash });
+}
+
+function createWindow(route: MainWindowRoute): BrowserWindow {
   const isMac = process.platform === 'darwin';
   const isWindows = process.platform === 'win32';
   const useCustomTitleBar = isWindows;
+  const isExistingInstallWindow = route === 'existing-install';
 
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    width: isExistingInstallWindow ? 560 : 1280,
+    height: isExistingInstallWindow ? 260 : 800,
+    minWidth: isExistingInstallWindow ? 560 : 960,
+    minHeight: isExistingInstallWindow ? 260 : 600,
     icon: getAppIcon(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -173,6 +187,7 @@ function createWindow(): BrowserWindow {
     trafficLightPosition: isMac ? { x: 16, y: 16 } : undefined,
     frame: isMac || !useCustomTitleBar,
     show: false,
+    resizable: !isExistingInstallWindow,
   });
 
   // Handle external links
@@ -181,13 +196,7 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' };
   });
 
-  // Load the app
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(process.env.VITE_DEV_SERVER_URL);
-    win.webContents.openDevTools();
-  } else {
-    win.loadFile(join(__dirname, '../../dist/index.html'));
-  }
+  loadAppWindow(win, route);
 
   return win;
 }
@@ -214,11 +223,16 @@ function focusMainWindow(): void {
   focusWindow(mainWindow);
 }
 
-function createMainWindow(): BrowserWindow {
-  const win = createWindow();
+function createMainWindow(route: MainWindowRoute, forceShowOnReady = false): BrowserWindow {
+  const win = createWindow(route);
 
   win.once('ready-to-show', () => {
     if (mainWindow !== win) {
+      return;
+    }
+
+    if (forceShowOnReady) {
+      focusWindow(win);
       return;
     }
 
@@ -277,8 +291,12 @@ async function initialize(): Promise<void> {
   // Set application menu
   createMenu();
 
+  const setupComplete = await getSetting('setupComplete');
+  const initialRoute: MainWindowRoute = 'existing-install';
+  const allowSetupBootstrapAtStartup = setupComplete && initialRoute !== 'existing-install';
+
   // Create the main window
-  const window = createMainWindow();
+  const window = createMainWindow(initialRoute, true);
 
   // Create system tray
   createTray(window);
@@ -330,30 +348,34 @@ async function initialize(): Promise<void> {
     logger.warn('Failed to repair bootstrap files:', error);
   });
 
-  // Pre-deploy built-in skills (feishu-doc, feishu-drive, feishu-perm, feishu-wiki)
-  // to ~/.openclaw/skills/ so they are immediately available without manual install.
-  void ensureBuiltinSkillsInstalled().catch((error) => {
-    logger.warn('Failed to install built-in skills:', error);
-  });
+  if (allowSetupBootstrapAtStartup) {
+    // Pre-deploy built-in skills (feishu-doc, feishu-drive, feishu-perm, feishu-wiki)
+    // to ~/.openclaw/skills/ so they are immediately available without manual install.
+    void ensureBuiltinSkillsInstalled().catch((error) => {
+      logger.warn('Failed to install built-in skills:', error);
+    });
 
-  // Pre-deploy bundled third-party skills from resources/preinstalled-skills.
-  // This installs full skill directories (not only SKILL.md) in an idempotent,
-  // non-destructive way and never blocks startup.
-  void ensurePreinstalledSkillsInstalled().catch((error) => {
-    logger.warn('Failed to install preinstalled skills:', error);
-  });
+    // Pre-deploy bundled third-party skills from resources/preinstalled-skills.
+    // This installs full skill directories (not only SKILL.md) in an idempotent,
+    // non-destructive way and never blocks startup.
+    void ensurePreinstalledSkillsInstalled().catch((error) => {
+      logger.warn('Failed to install preinstalled skills:', error);
+    });
 
-  // Pre-deploy/upgrade bundled OpenClaw plugins (dingtalk, wecom, qqbot, feishu, wechat)
-  // to ~/.openclaw/extensions/ so they are always up-to-date after an app update.
-  void ensureAllBundledPluginsInstalled().catch((error) => {
-    logger.warn('Failed to install/upgrade bundled plugins:', error);
-  });
+    // Pre-deploy/upgrade bundled OpenClaw plugins (dingtalk, wecom, qqbot, feishu, wechat)
+    // to ~/.openclaw/extensions/ so they are always up-to-date after an app update.
+    void ensureAllBundledPluginsInstalled().catch((error) => {
+      logger.warn('Failed to install/upgrade bundled plugins:', error);
+    });
+  } else {
+    logger.info('Skipping OpenClaw bootstrap while setup is incomplete');
+  }
 
   // Bridge gateway and host-side events before any auto-start logic runs, so
   // renderer subscribers observe the full startup lifecycle.
   gatewayManager.on('status', (status: { state: string }) => {
     hostEventBus.emit('gateway:status', status);
-    if (status.state === 'running') {
+    if (setupComplete && status.state === 'running') {
       void ensureTnymaAIContext().catch((error) => {
         logger.warn('Failed to re-merge TnymaAI context after gateway reconnect:', error);
       });
@@ -426,7 +448,7 @@ async function initialize(): Promise<void> {
 
   // Start Gateway automatically (this seeds missing bootstrap files with full templates)
   const gatewayAutoStart = await getSetting('gatewayAutoStart');
-  if (gatewayAutoStart) {
+  if (allowSetupBootstrapAtStartup && gatewayAutoStart) {
     try {
       await syncAllProviderAuthToRuntime();
       logger.debug('Auto-starting Gateway...');
@@ -440,22 +462,26 @@ async function initialize(): Promise<void> {
     logger.info('Gateway auto-start disabled in settings');
   }
 
-  // Merge TnymaAI context snippets into the workspace bootstrap files.
-  // The gateway seeds workspace files asynchronously after its HTTP server
-  // is ready, so ensureTnymaAIContext will retry until the target files appear.
-  void ensureTnymaAIContext().catch((error) => {
-    logger.warn('Failed to merge TnymaAI context into workspace:', error);
-  });
+  if (allowSetupBootstrapAtStartup) {
+    // Merge TnymaAI context snippets into the workspace bootstrap files.
+    // The gateway seeds workspace files asynchronously after its HTTP server
+    // is ready, so ensureTnymaAIContext will retry until the target files appear.
+    void ensureTnymaAIContext().catch((error) => {
+      logger.warn('Failed to merge TnymaAI context into workspace:', error);
+    });
 
-  // Auto-install openclaw CLI and shell completions (non-blocking).
-  void autoInstallCliIfNeeded((installedPath) => {
-    mainWindow?.webContents.send('openclaw:cli-installed', installedPath);
-  }).then(() => {
-    generateCompletionCache();
-    installCompletionToProfile();
-  }).catch((error) => {
-    logger.warn('CLI auto-install failed:', error);
-  });
+    // Auto-install openclaw CLI and shell completions (non-blocking).
+    void autoInstallCliIfNeeded((installedPath) => {
+      mainWindow?.webContents.send('openclaw:cli-installed', installedPath);
+    }).then(() => {
+      generateCompletionCache();
+      installCompletionToProfile();
+    }).catch((error) => {
+      logger.warn('CLI auto-install failed:', error);
+    });
+  } else {
+    logger.info('Skipping OpenClaw workspace/CLI bootstrap at startup until existing-install gate is cleared');
+  }
 }
 
 if (gotTheLock) {
@@ -511,7 +537,7 @@ if (gotTheLock) {
     // "Cannot create BrowserWindow before app is ready" on macOS.
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
+        createMainWindow('existing-install', true);
       } else {
         focusMainWindow();
       }

@@ -1,13 +1,13 @@
 import { session } from 'electron';
 import { getAllSettings, type AppSettings } from '../utils/store';
-import { buildElectronProxyConfig } from '../utils/proxy';
+import { buildRuntimeElectronProxyConfig } from '../utils/proxy';
 import { logger } from '../utils/logger';
 
 export async function applyProxySettings(
   partialSettings?: Pick<AppSettings, 'proxyEnabled' | 'proxyServer' | 'proxyBypassRules'>
 ): Promise<void> {
   const settings = partialSettings ?? await getAllSettings();
-  const config = buildElectronProxyConfig(settings);
+  const config = buildRuntimeElectronProxyConfig(settings);
 
   await session.defaultSession.setProxy(config);
   try {

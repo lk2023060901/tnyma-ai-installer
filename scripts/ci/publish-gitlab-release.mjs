@@ -29,6 +29,7 @@ const {
 
 const PACKAGE_NAME = (process.env.CI_RELEASE_PACKAGE_NAME?.trim() || 'tnyma-ai-installer').replace(/\s+/g, '-');
 const DIRECT_ASSET_PREFIX = (process.env.CI_RELEASE_ASSET_PATH_PREFIX?.trim() || '/installers').replace(/\/+$/, '');
+const PUBLIC_DOWNLOAD_BASE_URL = (process.env.CI_PUBLIC_DOWNLOAD_BASE_URL?.trim() || '').replace(/\/+$/, '');
 const DRY_RUN = ['1', 'true', 'yes'].includes((process.env.CI_RELEASE_DRY_RUN || '').trim().toLowerCase());
 
 const REQUIRED_ENV = ['CI_API_V4_URL', 'CI_COMMIT_TAG', 'CI_JOB_TOKEN', 'CI_PROJECT_ID', 'CI_PROJECT_URL'];
@@ -221,7 +222,12 @@ function collectAssets() {
       ...asset,
       packageUrl: `${CI_API_V4_URL}/projects/${encodeURIComponent(CI_PROJECT_ID)}/packages/generic/${encodeURIComponent(PACKAGE_NAME)}/${encodeURIComponent(CI_COMMIT_TAG)}/${encodeURIComponent(asset.filename)}`,
       directAssetPath: `${DIRECT_ASSET_PREFIX}/${asset.filename}`,
-      directDownloadUrl: `${CI_PROJECT_URL}/-/releases/${encodeURIComponent(CI_COMMIT_TAG)}/downloads${DIRECT_ASSET_PREFIX}/${encodeURIComponent(asset.filename)}`,
+      directDownloadUrl: PUBLIC_DOWNLOAD_BASE_URL
+        ? `${PUBLIC_DOWNLOAD_BASE_URL}/${encodeURIComponent(CI_COMMIT_TAG)}/${encodeURIComponent(asset.filename)}`
+        : `${CI_PROJECT_URL}/-/releases/${encodeURIComponent(CI_COMMIT_TAG)}/downloads${DIRECT_ASSET_PREFIX}/${encodeURIComponent(asset.filename)}`,
+      releaseLinkUrl: PUBLIC_DOWNLOAD_BASE_URL
+        ? `${PUBLIC_DOWNLOAD_BASE_URL}/${encodeURIComponent(CI_COMMIT_TAG)}/${encodeURIComponent(asset.filename)}`
+        : `${CI_PROJECT_URL}/-/releases/${encodeURIComponent(CI_COMMIT_TAG)}/downloads${DIRECT_ASSET_PREFIX}/${encodeURIComponent(asset.filename)}`,
       linkType: 'package',
       primary: isPrimaryDownloadAsset(asset.filename),
     }))
@@ -436,14 +442,18 @@ async function syncReleaseLinks(assets) {
     const existing = existingLinks.find((link) => (
       link.name === asset.filename
       || link.url === asset.packageUrl
+      || link.url === asset.releaseLinkUrl
       || link.direct_asset_url === asset.directDownloadUrl
     ));
     const payload = {
       name: asset.filename,
-      url: asset.packageUrl,
-      direct_asset_path: asset.directAssetPath,
+      url: asset.releaseLinkUrl,
       link_type: asset.linkType,
     };
+
+    if (!PUBLIC_DOWNLOAD_BASE_URL) {
+      payload.direct_asset_path = asset.directAssetPath;
+    }
 
     if (existing) {
       await apiRequest(`${basePath}/${existing.id}`, {

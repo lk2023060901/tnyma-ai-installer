@@ -64,6 +64,20 @@ export async function handleGatewayRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/gateway/wait-until-stable' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ timeoutMs?: number; intervalMs?: number }>(req).catch(() => ({}));
+      await ctx.gatewayManager.waitUntilStable({
+        timeoutMs: body.timeoutMs,
+        intervalMs: body.intervalMs,
+      });
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
   if (url.pathname === '/api/gateway/control-ui' && req.method === 'GET') {
     try {
       const status = ctx.gatewayManager.getStatus();

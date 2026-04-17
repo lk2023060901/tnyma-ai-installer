@@ -693,6 +693,40 @@ export class GatewayManager extends EventEmitter {
     }
   }
 
+  async waitUntilStable(options?: {
+    timeoutMs?: number;
+    intervalMs?: number;
+  }): Promise<void> {
+    const timeoutMs = Math.max(1000, options?.timeoutMs ?? 30_000);
+    const intervalMs = Math.max(100, options?.intervalMs ?? 400);
+    const deadline = Date.now() + timeoutMs;
+    let lastError = 'Gateway is not stable';
+
+    while (Date.now() < deadline) {
+      if (this.startLock) {
+        lastError = 'Gateway start is still in progress';
+      } else if (this.restartInFlight) {
+        lastError = 'Gateway restart is still in progress';
+      } else if (this.reloadDebounceTimer) {
+        lastError = 'Gateway reload is still pending';
+      } else if (this.restartController.hasPendingDebouncedRestart()) {
+        lastError = 'Gateway restart is still pending';
+      } else if (this.status.state === 'error') {
+        throw new Error(this.status.error || 'Gateway failed to start');
+      } else {
+        const health = await this.checkHealth();
+        if (health.ok) {
+          return;
+        }
+        lastError = health.error || lastError;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    throw new Error(lastError);
+  }
+
   /**
    * Start Gateway process
    * Uses OpenClaw npm package from node_modules (dev) or resources (production)

@@ -51,8 +51,8 @@ fi
 cd "${REPO_ROOT}"
 
 VERSION="$(node -p "require('./package.json').version")"
-DMG_PATH="release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}.dmg"
-ZIP_PATH="release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}.zip"
+APP_DIR="release/mac-${TARGET_ARCH}/TnymaAI.app"
+ZIP_PATH="release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}-local-test.zip"
 
 run_clean_env() {
   env \
@@ -76,33 +76,36 @@ sleep 1
 echo "==> Cleaning previous ${TARGET_ARCH} packaging artifacts"
 rm -rf "release/mac-${TARGET_ARCH}"
 rm -f \
-  "${DMG_PATH}" \
-  "${DMG_PATH}.blockmap" \
   "${ZIP_PATH}" \
-  "${ZIP_PATH}.blockmap"
+  "release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}.zip" \
+  "release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}.zip.blockmap" \
+  "release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}.dmg" \
+  "release/TnymaAI-${VERSION}-mac-${TARGET_ARCH}.dmg.blockmap"
 
 echo "==> Rebuilding app bundles"
 run_clean_env SKIP_PREINSTALLED_SKILLS=1 pnpm run package
 
-echo "==> Building macOS DMG (${TARGET_ARCH})"
-run_clean_env pnpm exec electron-builder --mac dmg "--${TARGET_ARCH}" --publish never
-
-echo "==> Building macOS ZIP (${TARGET_ARCH})"
-run_clean_env pnpm exec electron-builder --mac zip "--${TARGET_ARCH}" --publish never
+echo "==> Building unsigned macOS app bundle (${TARGET_ARCH}) for local testing"
+run_clean_env env \
+  CSC_IDENTITY_AUTO_DISCOVERY=false \
+  CSC_NAME= \
+  APPLE_KEYCHAIN_PROFILE= \
+  APPLE_KEYCHAIN= \
+  CSC_LINK= \
+  CSC_KEY_PASSWORD= \
+  pnpm exec electron-builder --config.mac.identity=null --mac dir "--${TARGET_ARCH}" --publish never
 
 echo "==> Verifying artifacts"
-if [ ! -f "${DMG_PATH}" ]; then
-  echo "DMG artifact not found: ${DMG_PATH}" >&2
+if [ ! -d "${APP_DIR}" ]; then
+  echo "App bundle not found: ${APP_DIR}" >&2
   exit 1
 fi
 
-if [ ! -f "${ZIP_PATH}" ]; then
-  echo "ZIP artifact not found: ${ZIP_PATH}" >&2
-  exit 1
-fi
+echo "==> Packaging local test zip"
+ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${ZIP_PATH}"
 
 echo "==> Removing update artifacts"
 node scripts/remove-update-artifacts.mjs
 
 echo "==> Done"
-ls -lah "${DMG_PATH}" "${ZIP_PATH}"
+ls -lah "${APP_DIR}" "${ZIP_PATH}"

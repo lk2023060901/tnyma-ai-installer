@@ -5,6 +5,7 @@ const runOpenClawDoctorMock = vi.fn();
 const runOpenClawDoctorFixMock = vi.fn();
 const detectInstalledProductsMock = vi.fn();
 const uninstallInstalledProductsMock = vi.fn();
+const ensureOpenClawGatewayServiceInstalledMock = vi.fn();
 const sendJsonMock = vi.fn();
 const sendNoContentMock = vi.fn();
 
@@ -16,6 +17,10 @@ vi.mock('@electron/utils/openclaw-doctor', () => ({
 vi.mock('@electron/services/installed-product', () => ({
   detectInstalledProducts: (...args: unknown[]) => detectInstalledProductsMock(...args),
   uninstallInstalledProducts: (...args: unknown[]) => uninstallInstalledProductsMock(...args),
+}));
+
+vi.mock('@electron/utils/openclaw-service', () => ({
+  ensureOpenClawGatewayServiceInstalled: (...args: unknown[]) => ensureOpenClawGatewayServiceInstalledMock(...args),
 }));
 
 vi.mock('@electron/api/route-utils', () => ({
@@ -115,6 +120,32 @@ describe('handleAppRoutes', () => {
       removedPaths: ['C:\\Users\\test\\.openclaw'],
       failures: [],
       remainingIndicators: [],
+    });
+  });
+
+  it('installs the gateway launch service through the host api', async () => {
+    const { parseJsonBody } = await import('@electron/api/route-utils');
+    vi.mocked(parseJsonBody).mockResolvedValueOnce({ forceRefresh: true });
+    ensureOpenClawGatewayServiceInstalledMock.mockResolvedValueOnce({
+      success: true,
+      loaded: true,
+      forceRefresh: true,
+    });
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:3210/api/app/gateway-service/install'),
+      {} as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(ensureOpenClawGatewayServiceInstalledMock).toHaveBeenCalledWith(true);
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, {
+      success: true,
+      loaded: true,
+      forceRefresh: true,
     });
   });
 });

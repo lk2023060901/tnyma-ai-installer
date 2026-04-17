@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -9,10 +9,14 @@ import { PORTS } from '../utils/config';
 import { logger } from '../utils/logger';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const POSIX_INSTALL_ROOTS = ['/opt/TnymaAI', '/opt/OpenClaw'];
 const POSIX_SYMLINKS = ['/usr/local/bin/tnyma-ai', '/usr/local/bin/openclaw'];
 const WINDOWS_PROCESS_IMAGES = ['TnymaAI.exe', 'OpenClaw.exe'];
 const POSIX_PROCESS_NAMES = ['TnymaAI', 'OpenClaw', 'tnyma-ai', 'openclaw-gateway'];
+const LAUNCHD_LABELS = ['ai.openclaw.gateway', 'ai.openclaw.codexdoc'];
+const LAUNCHD_PLIST_NAMES = ['ai.openclaw.gateway.plist', 'ai.openclaw.codexdoc.plist'];
+const LOGIN_ITEM_NAMES = ['TnymaAI', 'OpenClaw'];
 
 export type InstalledProductIndicatorKind = 'path' | 'port';
 
@@ -34,6 +38,10 @@ export interface InstalledProductUninstallResult {
   removedPaths: string[];
   failures: string[];
   remainingIndicators: InstalledProductIndicator[];
+}
+
+interface InstalledProductOptions {
+  ignoredProcessIds?: number[];
 }
 
 function uniquePaths(paths: string[]): string[] {
@@ -146,6 +154,7 @@ export function getInstalledProductCandidatePaths(
       joinForPlatform(platform, homeDir, 'Library', 'HTTPStorages', 'app.tnyma-ai.desktop'),
       joinForPlatform(platform, homeDir, 'Library', 'HTTPStorages', 'ai.openclaw.mac'),
       joinForPlatform(platform, homeDir, '.local', 'bin', 'openclaw'),
+      ...LAUNCHD_PLIST_NAMES.map((name) => joinForPlatform(platform, homeDir, 'Library', 'LaunchAgents', name)),
     ]);
   }
 
@@ -264,6 +273,44 @@ async function getProcessIdsByImage(image: string): Promise<number[]> {
   }
 }
 
+async function killProcessesByCommandPattern(pattern: string): Promise<void> {
+  if (!pattern.trim()) {
+    return;
+  }
+
+  try {
+    const { stdout } = await execAsync(`pgrep -f '${pattern.replace(/'/g, `'\\''`)}'`, { timeout: 5000 });
+    const processIds = stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+
+    for (const processId of processIds) {
+      try {
+        process.kill(processId, 'SIGTERM');
+      } catch {
+        // Ignore already-stopped processes.
+      }
+    }
+  } catch {
+    // Ignore missing matches.
+  }
+}
+
+async function stopMacAppBundleProcesses(candidatePaths: string[]): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const appBundlePaths = candidatePaths.filter((targetPath) => targetPath.endsWith('.app'));
+  for (const appBundlePath of appBundlePaths) {
+    const normalized = path.posix.normalize(appBundlePath);
+    await killProcessesByCommandPattern(`${normalized}/Contents/MacOS/`);
+    await killProcessesByCommandPattern(`${normalized}/Contents/Frameworks/`);
+  }
+}
+
 async function stopListeningProcesses(port: number): Promise<void> {
   const processIds = await getListeningProcessIds(port);
   for (const processId of processIds) {
@@ -275,6 +322,18 @@ async function stopListeningProcesses(port: number): Promise<void> {
       }
     } catch {
       // Best effort only.
+    }
+  }
+
+  if (process.platform !== 'win32' && processIds.length > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const remainingProcessIds = await getListeningProcessIds(port);
+    for (const processId of remainingProcessIds) {
+      try {
+        process.kill(Number.parseInt(processId, 10), 'SIGKILL');
+      } catch {
+        // Best effort only.
+      }
     }
   }
 }
@@ -317,20 +376,47 @@ async function removePathIfPresent(path: string): Promise<boolean> {
     return false;
   }
 
-  await rm(path, {
-    force: true,
-    recursive: true,
-    maxRetries: 3,
-    retryDelay: 300,
-  });
+  try {
+    await rm(path, {
+      force: true,
+      recursive: true,
+      maxRetries: 3,
+      retryDelay: 300,
+    });
+  } catch (error) {
+    if (process.platform !== 'darwin' || !existsSync(path)) {
+      throw error;
+    }
+
+    await execFileAsync('/bin/rm', ['-rf', path], { timeout: 10000 });
+  }
+
+  if (existsSync(path)) {
+    throw new Error(`Failed to remove ${path}: path still exists after uninstall attempt`);
+  }
+
   return true;
 }
 
-export async function detectInstalledProducts(): Promise<InstalledProductCheckResult> {
+function normalizeIgnoredProcessIds(options?: InstalledProductOptions): Set<string> {
+  return new Set(
+    (options?.ignoredProcessIds ?? [])
+      .filter((pid) => Number.isInteger(pid) && pid > 0)
+      .map((pid) => String(pid)),
+  );
+}
+
+async function getExternalListeningProcessIds(port: number, options?: InstalledProductOptions): Promise<string[]> {
+  const ignored = normalizeIgnoredProcessIds(options);
+  const processIds = await getListeningProcessIds(port);
+  return processIds.filter((pid) => !ignored.has(pid));
+}
+
+export async function detectInstalledProducts(options?: InstalledProductOptions): Promise<InstalledProductCheckResult> {
   const indicators = getExistingPathIndicators(
     excludeCurrentInstallMarkerPaths(getInstalledProductCandidatePaths()),
   );
-  if (await isGatewayPortOccupied()) {
+  if ((await getExternalListeningProcessIds(PORTS.OPENCLAW_GATEWAY, options)).length > 0) {
     indicators.push({ kind: 'port', value: `127.0.0.1:${PORTS.OPENCLAW_GATEWAY}` });
   }
 
@@ -342,40 +428,154 @@ export async function detectInstalledProducts(): Promise<InstalledProductCheckRe
   };
 }
 
-export async function uninstallInstalledProducts(): Promise<InstalledProductUninstallResult> {
+async function bootoutLaunchdServices(): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    return;
+  }
+
+  for (const label of LAUNCHD_LABELS) {
+    const serviceTarget = `gui/${uid}/${label}`;
+    try {
+      await execAsync(`launchctl bootout ${serviceTarget}`, { timeout: 10000 });
+      logger.info(`Unloaded launchd service: ${serviceTarget}`);
+    } catch {
+      // Service may not be loaded — that's fine.
+    }
+  }
+}
+
+async function removeMacLoginItems(): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  for (const name of LOGIN_ITEM_NAMES) {
+    try {
+      await execAsync(
+        `osascript -e 'tell application "System Events" to delete login item "${name}"'`,
+        { timeout: 5000 },
+      );
+    } catch {
+      // Login item may not exist — that's fine.
+    }
+  }
+}
+
+async function waitForProcessesDead(checkFn: () => Promise<boolean>, timeoutMs = 5000, pollMs = 300): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await checkFn()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+async function forceKillProcesses(processIds: number[]): Promise<void> {
+  for (const pid of processIds) {
+    if (pid === process.pid) {
+      continue;
+    }
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already dead.
+    }
+  }
+}
+
+async function collectAllTargetPids(options?: InstalledProductOptions): Promise<number[]> {
+  const pids = new Set<number>();
+  const ignored = normalizeIgnoredProcessIds(options);
+
+  // By image name
+  for (const name of (process.platform === 'win32' ? WINDOWS_PROCESS_IMAGES : POSIX_PROCESS_NAMES)) {
+    for (const pid of await getProcessIdsByImage(name)) {
+      if (!ignored.has(String(pid))) {
+        pids.add(pid);
+      }
+    }
+  }
+
+  // By port
+  for (const pidStr of await getExternalListeningProcessIds(PORTS.OPENCLAW_GATEWAY, options)) {
+    const pid = Number.parseInt(pidStr, 10);
+    if (Number.isInteger(pid) && pid > 0) {
+      pids.add(pid);
+    }
+  }
+
+  pids.delete(process.pid);
+  return [...pids];
+}
+
+export async function uninstallInstalledProducts(options?: InstalledProductOptions): Promise<InstalledProductUninstallResult> {
   const candidatePaths = excludeCurrentInstallMarkerPaths(getInstalledProductCandidatePaths());
   const removedPaths: string[] = [];
   const failures: string[] = [];
 
   logger.info('Attempting to remove existing OpenClaw-compatible installation markers');
 
-  await stopKnownProcesses();
-  await stopListeningProcesses(PORTS.OPENCLAW_GATEWAY);
+  // ── Step 1: Disable watchdogs so they can't respawn gateway ──
+  await bootoutLaunchdServices();
+  await removeMacLoginItems();
 
-  for (const path of candidatePaths) {
+  // ── Step 2: Kill all known processes (SIGTERM) ──
+  const pids = await collectAllTargetPids(options);
+  for (const pid of pids) {
     try {
-      const removed = await removePathIfPresent(path);
-      if (removed) {
-        removedPaths.push(path);
+      if (process.platform === 'win32') {
+        await execAsync(`taskkill /F /PID ${pid} /T`, { timeout: 5000, windowsHide: true });
+      } else {
+        process.kill(pid, 'SIGTERM');
       }
-    } catch (error) {
-      failures.push(`Failed to remove ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      // Already dead.
     }
   }
 
-  const remaining = await detectInstalledProducts();
-  if (remaining.detected) {
-    logger.warn('Existing install markers still present after uninstall attempt', remaining.indicators);
+  // Also kill .app bundle child processes on macOS
+  await stopMacAppBundleProcesses(candidatePaths);
+
+  // ── Step 3: Wait for processes to die, SIGKILL stragglers ──
+  await waitForProcessesDead(async () => (await collectAllTargetPids(options)).length === 0, 3000, 500);
+
+  const remaining = await collectAllTargetPids(options);
+  if (remaining.length > 0) {
+    await forceKillProcesses(remaining);
+    await waitForProcessesDead(async () => (await collectAllTargetPids(options)).length === 0, 3000, 500);
+  }
+
+  // ── Step 4: Remove directories and files ──
+  for (const targetPath of candidatePaths) {
+    try {
+      const removed = await removePathIfPresent(targetPath);
+      if (removed) {
+        removedPaths.push(targetPath);
+      }
+    } catch (error) {
+      failures.push(`Failed to remove ${targetPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const check = await detectInstalledProducts(options);
+  if (check.detected) {
+    logger.warn('Existing install markers still present after uninstall attempt', check.indicators);
   }
   if (failures.length > 0) {
     logger.warn('Existing install uninstall encountered failures', failures);
   }
 
   return {
-    success: !remaining.detected,
+    success: !check.detected,
     platform: process.platform,
     removedPaths,
     failures,
-    remainingIndicators: remaining.indicators,
+    remainingIndicators: check.indicators,
   };
 }

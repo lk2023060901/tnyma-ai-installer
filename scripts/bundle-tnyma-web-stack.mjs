@@ -13,6 +13,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -143,20 +144,51 @@ function copyWebRuntime() {
   ensureExists(WEB_STATIC_ROOT, 'Next static output');
   ensureExists(WEB_PUBLIC_ROOT, 'Web public assets');
 
-  cpSync(WEB_STANDALONE_ROOT, WEB_OUTPUT_ROOT, { recursive: true, dereference: true });
-  cpSync(WEB_STATIC_ROOT, path.join(WEB_OUTPUT_ROOT, '.next', 'static'), {
+  const standaloneAppRoot = path.join(WEB_OUTPUT_ROOT, 'apps', 'web');
+
+  cpSync(WEB_STANDALONE_ROOT, WEB_OUTPUT_ROOT, { recursive: true, dereference: false });
+  cpSync(WEB_STATIC_ROOT, path.join(standaloneAppRoot, '.next', 'static'), {
     recursive: true,
     dereference: true,
   });
-  cpSync(WEB_PUBLIC_ROOT, path.join(WEB_OUTPUT_ROOT, 'public'), {
+  cpSync(WEB_PUBLIC_ROOT, path.join(standaloneAppRoot, 'public'), {
     recursive: true,
     dereference: true,
   });
 
-  flattenSymlinks(WEB_OUTPUT_ROOT);
+  restoreRelativeSymlinks(WEB_STANDALONE_ROOT, WEB_OUTPUT_ROOT);
+  flattenAbsoluteSymlinks(WEB_OUTPUT_ROOT);
 }
 
-function flattenSymlinks(rootDir) {
+function restoreRelativeSymlinks(sourceDir, targetDir) {
+  const queue = [[sourceDir, targetDir]];
+
+  while (queue.length > 0) {
+    const [currentSourcePath, currentTargetPath] = queue.shift();
+    const entries = readdirSync(currentSourcePath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const sourceEntryPath = path.join(currentSourcePath, entry.name);
+      const targetEntryPath = path.join(currentTargetPath, entry.name);
+      const stat = lstatSync(sourceEntryPath);
+
+      if (stat.isSymbolicLink()) {
+        const targetPath = readlinkSync(sourceEntryPath);
+        if (!path.isAbsolute(targetPath)) {
+          rmSync(targetEntryPath, { recursive: true, force: true });
+          symlinkSync(targetPath, targetEntryPath);
+        }
+        continue;
+      }
+
+      if (stat.isDirectory()) {
+        queue.push([sourceEntryPath, targetEntryPath]);
+      }
+    }
+  }
+}
+
+function flattenAbsoluteSymlinks(rootDir) {
   const queue = [rootDir];
 
   while (queue.length > 0) {
@@ -169,6 +201,9 @@ function flattenSymlinks(rootDir) {
 
       if (stat.isSymbolicLink()) {
         const targetPath = readlinkSync(entryPath);
+        if (!path.isAbsolute(targetPath)) {
+          continue;
+        }
         const resolvedTargetPath = path.isAbsolute(targetPath)
           ? realpathSync(targetPath)
           : realpathSync(path.resolve(path.dirname(entryPath), targetPath));

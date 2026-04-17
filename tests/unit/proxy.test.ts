@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildElectronProxyConfig,
   buildProxyEnv,
+  buildRuntimeElectronProxyConfig,
+  buildRuntimeProxyEnv,
   normalizeProxyServer,
   resolveProxySettings,
+  resolveRuntimeProxySettings,
 } from '@electron/utils/proxy';
 
 describe('proxy helpers', () => {
@@ -106,6 +109,66 @@ describe('proxy helpers', () => {
       all_proxy: 'socks5://127.0.0.1:7891',
       NO_PROXY: '<local>,localhost,127.0.0.1',
       no_proxy: '<local>,localhost,127.0.0.1',
+    });
+  });
+
+  it('inherits proxy env for runtime when proxy settings are untouched', () => {
+    expect(resolveRuntimeProxySettings({
+      proxyEnabled: false,
+      proxyServer: '',
+      proxyHttpServer: '',
+      proxyHttpsServer: '',
+      proxyAllServer: '',
+      proxyBypassRules: '<local>;localhost;127.0.0.1;::1',
+    }, {
+      env: {
+        HTTP_PROXY: 'http://127.0.0.1:7897',
+        HTTPS_PROXY: 'http://127.0.0.1:7897',
+        ALL_PROXY: 'socks5://127.0.0.1:7898',
+        NO_PROXY: 'localhost,127.0.0.1',
+      },
+    })).toEqual({
+      httpProxy: 'http://127.0.0.1:7897',
+      httpsProxy: 'http://127.0.0.1:7897',
+      allProxy: 'socks5://127.0.0.1:7898',
+      bypassRules: 'localhost,127.0.0.1',
+    });
+  });
+
+  it('does not inherit proxy env when proxy was explicitly disabled in settings', () => {
+    expect(buildRuntimeElectronProxyConfig({
+      proxyEnabled: false,
+      proxyServer: 'http://127.0.0.1:7890',
+      proxyHttpServer: '',
+      proxyHttpsServer: '',
+      proxyAllServer: '',
+      proxyBypassRules: '<local>;localhost',
+    }, {
+      env: {
+        HTTP_PROXY: 'http://127.0.0.1:7897',
+      },
+    })).toEqual({ mode: 'direct' });
+
+    expect(buildRuntimeProxyEnv({
+      proxyEnabled: false,
+      proxyServer: 'http://127.0.0.1:7890',
+      proxyHttpServer: '',
+      proxyHttpsServer: '',
+      proxyAllServer: '',
+      proxyBypassRules: '<local>;localhost',
+    }, {
+      env: {
+        HTTP_PROXY: 'http://127.0.0.1:7897',
+      },
+    })).toEqual({
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: '',
+      http_proxy: '',
+      https_proxy: '',
+      all_proxy: '',
+      NO_PROXY: '',
+      no_proxy: '',
     });
   });
 });

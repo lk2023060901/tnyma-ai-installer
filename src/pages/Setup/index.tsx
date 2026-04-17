@@ -25,9 +25,7 @@ import {
 } from 'lucide-react';
 import { TitleBar } from '@/components/layout/TitleBar';
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
-import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
@@ -42,6 +40,7 @@ import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
 import { waitForGatewayReady } from '@/lib/gateway-ready';
+
 interface SetupStep {
   id: string;
   title: string;
@@ -129,10 +128,9 @@ import {
   pickPreferredAccount,
 } from '@/lib/provider-accounts';
 import {
-  ensureGatewayReadyForProviderModels,
-  fetchProviderModels,
   requiresManualProviderModelEntry,
   supportsProviderModelCatalog,
+  syncProviderModelsToAccount,
   type ProviderModelCatalogEntry,
 } from '@/lib/provider-models';
 import {
@@ -164,24 +162,6 @@ type AutoSetupProgressEntry = {
   status: AutoSetupProgressStatus;
   stepId: string;
 };
-type ExistingInstallIndicator = {
-  kind: 'path' | 'port';
-  value: string;
-};
-type ExistingInstallCheckResponse = {
-  success: true;
-  detected: boolean;
-  platform: string;
-  indicators: ExistingInstallIndicator[];
-};
-type ExistingInstallUninstallResponse = {
-  success: boolean;
-  platform: string;
-  removedPaths: string[];
-  failures: string[];
-  remainingIndicators: ExistingInstallIndicator[];
-};
-type ExistingInstallGateState = 'checking' | 'ready' | 'detected' | 'uninstalling' | 'error';
 
 function isSetupManagedChannelType(value: string): value is SetupManagedChannelType {
   return value === 'wechat' || value === 'feishu' || value === 'qqbot';
@@ -224,12 +204,6 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatExistingInstallIndicator(t: TFunction, indicator: ExistingInstallIndicator): string {
-  return indicator.kind === 'port'
-    ? t('existingInstall.indicatorPort', { value: indicator.value })
-    : t('existingInstall.indicatorPath', { value: indicator.value });
-}
-
 async function fetchControlUiUrl(): Promise<string> {
   const result = await hostApiFetch<{
     success: boolean;
@@ -243,6 +217,14 @@ async function fetchControlUiUrl(): Promise<string> {
 
   return result.url;
 }
+
+type GatewayServiceInstallResponse = {
+  success: boolean;
+  skipped?: boolean;
+  alreadyInstalled?: boolean;
+  loaded?: boolean;
+  error?: string;
+};
 
 async function waitForControlUiUrl(retries = CONTROL_UI_POLL_RETRIES): Promise<string> {
   await waitForGatewayReady({ startIfNeeded: false });
@@ -278,6 +260,30 @@ async function ensureGatewayRunning(): Promise<void> {
   }
 }
 
+async function ensureGatewayServiceInstalled(forceRefresh = false): Promise<void> {
+  const result = await hostApiFetch<GatewayServiceInstallResponse>('/api/app/gateway-service/install', {
+    method: 'POST',
+    body: JSON.stringify({ forceRefresh }),
+  });
+
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to install OpenClaw gateway LaunchAgent');
+  }
+}
+
+function ensureGatewayServiceInstalledInBackground(forceRefresh = false): void {
+  void ensureGatewayServiceInstalled(forceRefresh).catch((error) => {
+    console.warn('Failed to install OpenClaw gateway LaunchAgent in background:', error);
+  });
+}
+
+async function prepareGatewayControlUi(): Promise<string> {
+  await persistBackgroundGatewayStartupSettings();
+  ensureGatewayServiceInstalledInBackground(false);
+  await ensureGatewayRunning();
+  return await waitForControlUiUrl();
+}
+
 const BACKGROUND_GATEWAY_STARTUP_SETTINGS = {
   gatewayAutoStart: true,
   launchAtStartup: true,
@@ -305,21 +311,12 @@ export function Setup() {
   const setupComplete = useSettingsStore((state) => state.setupComplete);
   const markSetupComplete = useSettingsStore((state) => state.markSetupComplete);
   const [openingControlUi, setOpeningControlUi] = useState(false);
-  const [existingInstallGateState, setExistingInstallGateState] = useState<ExistingInstallGateState>(
-    setupComplete ? 'ready' : 'checking',
-  );
-  const [existingInstallIndicators, setExistingInstallIndicators] = useState<ExistingInstallIndicator[]>([]);
-  const [existingInstallFailures, setExistingInstallFailures] = useState<string[]>([]);
-  const [showExistingInstallDialog, setShowExistingInstallDialog] = useState(false);
-  const [existingInstallProgress, setExistingInstallProgress] = useState(0);
-  const [existingInstallError, setExistingInstallError] = useState<string | null>(null);
-  const [existingInstallErrorSource, setExistingInstallErrorSource] = useState<'check' | 'uninstall'>('check');
-  const [currentStep, setCurrentStep] = useState<number>(
-    setupComplete ? STEP.COMPLETE : STEP.WELCOME,
-  );
+  const [currentStep, setCurrentStep] = useState<number>(STEP.WELCOME);
 
   // Setup state
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [selectedProviderAccountId, setSelectedProviderAccountId] = useState<string | null>(null);
+  const [selectedProviderAccount, setSelectedProviderAccount] = useState<ProviderAccount | null>(null);
   const [providerStepReady, setProviderStepReady] = useState(false);
   const [modelStepReady, setModelStepReady] = useState(false);
   const [channelStepBusy, setChannelStepBusy] = useState(false);
@@ -363,112 +360,13 @@ export function Setup() {
   }, [channelStepBusy, modelStepReady, providerStepReady, runtimeChecksPassed, safeStepIndex, stepSubmitting]);
 
   useEffect(() => {
-    if (setupComplete) {
-      setCurrentStep(STEP.COMPLETE);
-      setExistingInstallGateState('ready');
-    }
+    setCurrentStep((previousStep) => {
+      if (setupComplete) {
+        return STEP.COMPLETE;
+      }
+      return previousStep === STEP.COMPLETE ? STEP.WELCOME : previousStep;
+    });
   }, [setupComplete]);
-
-  const runExistingInstallCheck = useCallback(async () => {
-    setExistingInstallGateState('checking');
-    setExistingInstallError(null);
-    setExistingInstallFailures([]);
-
-    try {
-      const result = await hostApiFetch<ExistingInstallCheckResponse>('/api/app/installed-products');
-      setExistingInstallIndicators(result.indicators);
-      if (result.detected) {
-        setExistingInstallGateState('detected');
-        setShowExistingInstallDialog(true);
-        return;
-      }
-
-      setShowExistingInstallDialog(false);
-      setExistingInstallGateState('ready');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setShowExistingInstallDialog(false);
-      setExistingInstallErrorSource('check');
-      setExistingInstallError(message);
-      setExistingInstallGateState('error');
-    }
-  }, []);
-
-  useEffect(() => {
-    if (setupComplete) {
-      return;
-    }
-
-    void runExistingInstallCheck();
-  }, [runExistingInstallCheck, setupComplete]);
-
-  const handleExitInstaller = useCallback(async () => {
-    await invokeIpc('app:quit');
-  }, []);
-
-  const startExistingInstallUninstall = useCallback(async () => {
-    setShowExistingInstallDialog(false);
-    setExistingInstallGateState('uninstalling');
-    setExistingInstallError(null);
-    setExistingInstallFailures([]);
-    setExistingInstallProgress(8);
-
-    let progressTimer: ReturnType<typeof setInterval> | null = null;
-    progressTimer = setInterval(() => {
-      setExistingInstallProgress((current) => (current >= 92 ? current : current + 6));
-    }, 350);
-
-    try {
-      const result = await hostApiFetch<ExistingInstallUninstallResponse>(
-        '/api/app/installed-products/uninstall',
-        { method: 'POST' },
-      );
-
-      if (progressTimer) {
-        clearInterval(progressTimer);
-      }
-
-      setExistingInstallFailures(result.failures);
-
-      if (!result.success) {
-        setExistingInstallIndicators(result.remainingIndicators);
-        setExistingInstallErrorSource('uninstall');
-        setExistingInstallError(result.failures[0] || t('existingInstall.uninstallFailedDescription'));
-        setExistingInstallGateState('error');
-        return;
-      }
-
-      setExistingInstallProgress(100);
-      await delay(450);
-      setExistingInstallIndicators([]);
-      setExistingInstallGateState('ready');
-    } catch (error) {
-      if (progressTimer) {
-        clearInterval(progressTimer);
-      }
-
-      const message = error instanceof Error ? error.message : String(error);
-      setExistingInstallErrorSource('uninstall');
-      setExistingInstallError(message);
-      setExistingInstallGateState('error');
-    }
-  }, [t]);
-
-  const existingInstallDetails = useMemo(
-    () => existingInstallIndicators.map((indicator) => formatExistingInstallIndicator(t, indicator)),
-    [existingInstallIndicators, t],
-  );
-
-  const retryExistingInstallGate = useCallback(async () => {
-    if (existingInstallErrorSource === 'uninstall') {
-      await startExistingInstallUninstall();
-      return;
-    }
-
-    setExistingInstallFailures([]);
-    setExistingInstallIndicators([]);
-    await runExistingInstallCheck();
-  }, [existingInstallErrorSource, runExistingInstallCheck, startExistingInstallUninstall]);
 
   const openControlUi = useCallback(async () => {
     if (openingControlUi) {
@@ -477,9 +375,7 @@ export function Setup() {
 
     setOpeningControlUi(true);
     try {
-      await persistBackgroundGatewayStartupSettings();
-      await ensureGatewayRunning();
-      const controlUiUrl = await waitForControlUiUrl();
+      const controlUiUrl = await prepareGatewayControlUi();
       await invokeIpc('shell:openExternal', controlUiUrl);
       await invokeIpc('window:close');
     } finally {
@@ -489,12 +385,15 @@ export function Setup() {
 
   const handleNext = async () => {
     if (isLastStep) {
-      markSetupComplete();
+      setStepSubmitting(true);
       try {
+        markSetupComplete();
         await openControlUi();
         toast.success(t('complete.title'));
       } catch (error) {
         toast.error(String(error));
+      } finally {
+        setStepSubmitting(false);
       }
       return;
     }
@@ -576,23 +475,6 @@ export function Setup() {
     );
   }
 
-  if (existingInstallGateState !== 'ready') {
-    return (
-      <ExistingInstallGate
-        details={existingInstallDetails}
-        dialogOpen={showExistingInstallDialog}
-        errorMessage={existingInstallError}
-        failures={existingInstallFailures}
-        progress={existingInstallProgress}
-        state={existingInstallGateState}
-        onCancel={handleExitInstaller}
-        onConfirm={startExistingInstallUninstall}
-        onRetry={retryExistingInstallGate}
-        t={t}
-      />
-    );
-  }
-
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <TitleBar />
@@ -655,6 +537,10 @@ export function Setup() {
                   providers={providers}
                   selectedProvider={selectedProvider}
                   onSelectProvider={setSelectedProvider}
+                  selectedAccountId={selectedProviderAccountId}
+                  onSelectedAccountIdChange={setSelectedProviderAccountId}
+                  activeAccount={selectedProviderAccount}
+                  onActiveAccountChange={setSelectedProviderAccount}
                   apiKey={apiKey}
                   onApiKeyChange={setApiKey}
                   onCanProceedChange={setProviderStepReady}
@@ -665,6 +551,8 @@ export function Setup() {
                   ref={modelStepRef}
                   providers={providers}
                   selectedProvider={selectedProvider}
+                  selectedAccountId={selectedProviderAccountId}
+                  activeAccount={selectedProviderAccount}
                   onCanProceedChange={setModelStepReady}
                 />
               )}
@@ -1129,6 +1017,10 @@ interface ProviderContentProps {
   providers: ProviderTypeInfo[];
   selectedProvider: string | null;
   onSelectProvider: (id: string | null) => void;
+  selectedAccountId: string | null;
+  onSelectedAccountIdChange: (accountId: string | null) => void;
+  activeAccount: ProviderAccount | null;
+  onActiveAccountChange: (account: ProviderAccount | null) => void;
   apiKey: string;
   onApiKeyChange: (key: string) => void;
   onCanProceedChange: (canProceed: boolean) => void;
@@ -1138,6 +1030,10 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
   providers,
   selectedProvider,
   onSelectProvider,
+  selectedAccountId,
+  onSelectedAccountIdChange,
+  activeAccount,
+  onActiveAccountChange,
   apiKey,
   onApiKeyChange,
   onCanProceedChange,
@@ -1145,8 +1041,6 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
   const { t, i18n } = useTranslation(['setup', 'settings']);
   const [showKey, setShowKey] = useState(false);
   const [keyValid, setKeyValid] = useState<boolean | null>(null);
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const [activeAccount, setActiveAccount] = useState<ProviderAccount | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
   const [apiProtocol, setApiProtocol] = useState<ProviderAccount['apiProtocol']>('openai-completions');
@@ -1216,6 +1110,20 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
     }
     return resolveProviderChoiceFromAccount(activeAccount) === selectedChoice.id;
   }, [activeAccount, selectedAccountId, selectedChoice, useOAuthFlow]);
+  const reusableSelectedAccountId = useMemo(() => {
+    if (!selectedChoice || !selectedAccountId || !activeAccount) {
+      return null;
+    }
+    if (activeAccount.id !== selectedAccountId) {
+      return null;
+    }
+    if (activeAccount.vendorId !== selectedChoice.vendorId) {
+      return null;
+    }
+    return resolveProviderChoiceFromAccount(activeAccount) === selectedChoice.id
+      ? selectedAccountId
+      : null;
+  }, [activeAccount, selectedAccountId, selectedChoice]);
   const canProceed = useMemo(() => {
     if (!selectedChoice) {
       return false;
@@ -1325,8 +1233,8 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
             method: 'PUT',
             body: JSON.stringify({ accountId }),
         });
-        setSelectedAccountId(accountId);
-        setActiveAccount(await hostApiFetch<ProviderAccount | null>(
+        onSelectedAccountIdChange(accountId);
+        onActiveAccountChange(await hostApiFetch<ProviderAccount | null>(
           `/api/provider-accounts/${encodeURIComponent(accountId)}`,
         ));
       } catch (error) {
@@ -1335,12 +1243,12 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
     }
 
       pendingOAuthRef.current = null;
-    if (latestChoice) {
-      setSelectedChoiceId(latestChoice.id);
-      onSelectProvider(latestChoice.vendorId);
-    }
-    toast.success(t('provider.valid'));
-  };
+      if (latestChoice) {
+        setSelectedChoiceId(latestChoice.id);
+        onSelectProvider(latestChoice.vendorId);
+      }
+      toast.success(t('provider.valid'));
+    };
 
     const handleError = (data: unknown) => {
       setOauthError((data as { message: string }).message);
@@ -1392,7 +1300,7 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       const snapshot = await fetchProviderSnapshot();
       const accountId = buildProviderAccountId(
         selectedChoice.vendorId,
-        selectedAccountId,
+        reusableSelectedAccountId,
         snapshot.vendors,
       );
       const label = getSupportedProviderChoiceDisplayLabel(selectedChoice);
@@ -1453,8 +1361,8 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
         if (preferred && !cancelled) {
           const restoredChoiceId = resolveProviderChoiceFromAccount(preferred);
           onSelectProvider(preferred.vendorId);
-          setSelectedAccountId(preferred.id);
-          setActiveAccount(preferred);
+          onSelectedAccountIdChange(preferred.id);
+          onActiveAccountChange(preferred);
           setSelectedChoiceId(restoredChoiceId);
         const typeInfo = providers.find((p) => p.id === preferred.vendorId);
         const restoredChoice = supportedChoices.find((choice) => choice.id === restoredChoiceId) ?? null;
@@ -1468,9 +1376,9 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       } else if (!cancelled) {
         setSelectedChoiceId(null);
         onSelectProvider(null);
-        setSelectedAccountId(null);
+        onSelectedAccountIdChange(null);
         onApiKeyChange('');
-        setActiveAccount(null);
+        onActiveAccountChange(null);
       }
       } catch (error) {
         if (!cancelled) {
@@ -1479,15 +1387,22 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       }
     })();
     return () => { cancelled = true; };
-  }, [onApiKeyChange, onSelectProvider, providers, supportedChoices]);
+  }, [
+    onActiveAccountChange,
+    onApiKeyChange,
+    onSelectProvider,
+    onSelectedAccountIdChange,
+    providers,
+    supportedChoices,
+  ]);
 
   // When provider changes, load stored key + reset base URL
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!selectedChoice) {
-        setSelectedAccountId(null);
-        setActiveAccount(null);
+        onSelectedAccountIdChange(null);
+        onActiveAccountChange(null);
         return;
       }
       setApiProtocol('openai-completions');
@@ -1505,8 +1420,8 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
           ? resolveProviderChoiceFromAccount(preferredAccount)
           : null;
         const sameChoiceAccount = preferredChoiceId === selectedChoice.id;
-        setSelectedAccountId(preferredAccount?.id || null);
-        setActiveAccount(preferredAccount ?? null);
+        onSelectedAccountIdChange(preferredAccount?.id || null);
+        onActiveAccountChange(preferredAccount ?? null);
 
         const storedKey = (await hostApiFetch<{ apiKey: string | null }>(
           `/api/providers/${encodeURIComponent(accountIdForLoad)}/api-key`,
@@ -1547,7 +1462,13 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       }
     })();
     return () => { cancelled = true; };
-  }, [onApiKeyChange, providers, selectedChoice]);
+  }, [
+    onActiveAccountChange,
+    onApiKeyChange,
+    onSelectedAccountIdChange,
+    providers,
+    selectedChoice,
+  ]);
 
   useEffect(() => {
     if (!providerMenuOpen) return;
@@ -1577,9 +1498,48 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       return false;
     }
 
+    const ensureGatewayReadyAfterProviderSave = async (
+      accountId: string,
+      authMode: ProviderAccount['authMode'] | undefined,
+      defaultModelId?: string,
+    ): Promise<void> => {
+      if (!supportsProviderModelCatalog(authMode ? { authMode } : null)) {
+        return;
+      }
+
+      const restartResult = await hostApiFetch<{ success: boolean; error?: string }>(
+        '/api/gateway/restart',
+        { method: 'POST' },
+      );
+      if (!restartResult.success) {
+        throw new Error(restartResult.error || 'Failed to restart gateway');
+      }
+      const stableResult = await hostApiFetch<{ success: boolean; error?: string }>(
+        '/api/gateway/wait-until-stable',
+        { method: 'POST' },
+      );
+      if (!stableResult.success) {
+        throw new Error(stableResult.error || 'Gateway did not become stable');
+      }
+
+      await syncProviderModelsToAccount({
+        accountId,
+        defaultModelId,
+      });
+    };
+
     if (useOAuthFlow) {
       if (oauthConfigured) {
         setKeyValid(true);
+        const accountIdForOauthSync = activeAccount?.id ?? selectedAccountId;
+        if (!accountIdForOauthSync) {
+          throw new Error('Provider account not found after OAuth login');
+        }
+        await ensureGatewayReadyAfterProviderSave(
+          accountIdForOauthSync,
+          activeAccount?.authMode ?? selectedChoice.authMode,
+          selectedChoice.defaultModelId,
+        );
         return true;
       }
       toast.error(t('provider.completeLoginFirst'));
@@ -1612,7 +1572,7 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       if (requiresApiKey && apiKey.trim() && !selectedChoice.skipValidation) {
         const result = await invokeIpc(
           'provider:validateKey',
-          selectedAccountId || selectedChoice.vendorId,
+          reusableSelectedAccountId || selectedChoice.vendorId,
           apiKey,
           {
             baseUrl: baseUrl.trim() || undefined,
@@ -1633,7 +1593,7 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
       const snapshot = await fetchProviderSnapshot();
       const accountIdForSave = buildProviderAccountId(
         selectedChoice.vendorId,
-        selectedAccountId,
+        reusableSelectedAccountId,
         snapshot.vendors,
       );
 
@@ -1662,7 +1622,7 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
         updatedAt: new Date().toISOString(),
       };
 
-      const saveResult = selectedAccountId
+      const saveResult = reusableSelectedAccountId
         ? await hostApiFetch<{ success: boolean; error?: string }>(
           `/api/provider-accounts/${encodeURIComponent(accountIdForSave)}`,
           {
@@ -1703,13 +1663,18 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
         throw new Error(defaultResult.error || 'Failed to set default provider');
       }
 
-      setSelectedAccountId(accountIdForSave);
-      setActiveAccount({
+      onSelectedAccountIdChange(accountIdForSave);
+      onActiveAccountChange({
         ...(activeAccount ?? accountPayload),
         ...accountPayload,
         id: accountIdForSave,
         updatedAt: new Date().toISOString(),
       });
+      await ensureGatewayReadyAfterProviderSave(
+        accountIdForSave,
+        accountPayload.authMode,
+        selectedChoice.defaultModelId,
+      );
       toast.success(t('provider.valid'));
       return true;
     } catch (error) {
@@ -1728,8 +1693,11 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
     resolvedApiProtocol,
     selectedAccountId,
     selectedChoice,
+    reusableSelectedAccountId,
     t,
     useOAuthFlow,
+    onActiveAccountChange,
+    onSelectedAccountIdChange,
   ]);
 
   useImperativeHandle(ref, () => ({
@@ -1740,8 +1708,8 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
     const typeInfo = providers.find((provider) => provider.id === choice.vendorId);
     onSelectProvider(choice.vendorId);
     setSelectedChoiceId(choice.id);
-    setSelectedAccountId(null);
-    setActiveAccount(null);
+    onSelectedAccountIdChange(null);
+    onActiveAccountChange(null);
     onApiKeyChange('');
     setKeyValid(null);
     setShowKey(false);
@@ -2178,12 +2146,16 @@ const ProviderContent = forwardRef<SetupStepHandle, ProviderContentProps>(functi
 interface ModelContentProps {
   providers: ProviderTypeInfo[];
   selectedProvider: string | null;
+  selectedAccountId: string | null;
+  activeAccount: ProviderAccount | null;
   onCanProceedChange: (canProceed: boolean) => void;
 }
 
 const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function ModelContent({
   providers,
   selectedProvider,
+  selectedAccountId,
+  activeAccount,
   onCanProceedChange,
 }: ModelContentProps, ref) {
   const { t } = useTranslation(['setup', 'settings']);
@@ -2226,21 +2198,24 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
     setModelsLoading(true);
     setLoadError(null);
     try {
-      await ensureGatewayReadyForProviderModels();
-      const models = await fetchProviderModels(nextAccount.id);
+      const { models, selectedModelId } = await syncProviderModelsToAccount({
+        accountId: nextAccount.id,
+        defaultModelId: nextProvider?.defaultModelId,
+      });
       const refreshedAccount = await hostApiFetch<ProviderAccount | null>(
         `/api/provider-accounts/${encodeURIComponent(nextAccount.id)}`,
       );
       const resolvedAccount = refreshedAccount ?? nextAccount;
       const resolvedModels = models;
-      const resolvedModelId = resolvedAccount.model?.trim()
+      const resolvedModelId = selectedModelId?.trim()
+        || resolvedAccount.model?.trim()
         || nextProvider?.defaultModelId?.trim()
         || resolvedModels[0]?.id
         || '';
 
       setAccount(resolvedAccount);
       setAvailableModels(resolvedModels);
-      setModelId(resolvedModels.length > 0 ? resolvedModelId : '');
+      setModelId(resolvedModelId);
     } catch (error) {
       console.error('Failed to load provider models:', error);
       setAccount(nextAccount);
@@ -2256,13 +2231,35 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
     let cancelled = false;
     (async () => {
       try {
-        const snapshot = await fetchProviderSnapshot();
-        const statusMap = new Map(snapshot.statuses.map((status) => [status.id, status]));
-        const preferredAccount = selectedProvider
-          ? pickPreferredAccount(snapshot.accounts, snapshot.defaultAccountId, selectedProvider, statusMap)
-          : (snapshot.defaultAccountId
-            ? snapshot.accounts.find((candidate) => candidate.id === snapshot.defaultAccountId) ?? null
-            : snapshot.accounts[0] ?? null);
+        let preferredAccount: ProviderAccount | null = null;
+
+        if (selectedAccountId) {
+          preferredAccount = await hostApiFetch<ProviderAccount | null>(
+            `/api/provider-accounts/${encodeURIComponent(selectedAccountId)}`,
+          );
+        }
+
+        if (!preferredAccount && activeAccount) {
+          preferredAccount = activeAccount;
+        }
+
+        if (
+          preferredAccount
+          && selectedProvider
+          && preferredAccount.vendorId !== selectedProvider
+        ) {
+          preferredAccount = null;
+        }
+
+        if (!preferredAccount) {
+          const snapshot = await fetchProviderSnapshot();
+          const statusMap = new Map(snapshot.statuses.map((status) => [status.id, status]));
+          preferredAccount = selectedProvider
+            ? pickPreferredAccount(snapshot.accounts, snapshot.defaultAccountId, selectedProvider, statusMap)
+            : (snapshot.defaultAccountId
+              ? snapshot.accounts.find((candidate) => candidate.id === snapshot.defaultAccountId) ?? null
+              : snapshot.accounts[0] ?? null);
+        }
 
         if (!preferredAccount) {
           throw new Error(t('model.noProviderConfigured'));
@@ -2286,7 +2283,7 @@ const ModelContent = forwardRef<SetupStepHandle, ModelContentProps>(function Mod
     return () => {
       cancelled = true;
     };
-  }, [loadModels, selectedProvider, t]);
+  }, [activeAccount, loadModels, selectedAccountId, selectedProvider, t]);
 
   const handleSaveModel = useCallback(async (): Promise<boolean> => {
     if (!account) {
@@ -3251,139 +3248,6 @@ interface CompleteContentProps {
 interface SetupLauncherProps {
   isOpening: boolean;
   onOpen: () => Promise<void>;
-}
-
-interface ExistingInstallGateProps {
-  details: string[];
-  dialogOpen: boolean;
-  errorMessage: string | null;
-  failures: string[];
-  progress: number;
-  state: ExistingInstallGateState;
-  onCancel: () => void | Promise<void>;
-  onConfirm: () => void | Promise<void>;
-  onRetry: () => void | Promise<void>;
-  t: TFunction;
-}
-
-function ExistingInstallGate({
-  details,
-  dialogOpen,
-  errorMessage,
-  failures,
-  progress,
-  state,
-  onCancel,
-  onConfirm,
-  onRetry,
-  t,
-}: ExistingInstallGateProps) {
-  const isChecking = state === 'checking';
-  const isDetected = state === 'detected';
-  const isUninstalling = state === 'uninstalling';
-  const isError = state === 'error';
-
-  return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <TitleBar />
-      <div className="flex flex-1 items-center justify-center p-8">
-        <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-sm">
-          <div className="mb-6 text-center">
-            <div className="mb-4 flex justify-center">
-              {isError ? (
-                <AlertCircle className="h-12 w-12 text-destructive" />
-              ) : isUninstalling ? (
-                <Loader2 className="h-12 w-12 animate-spin text-primary" />
-              ) : (
-                <AlertCircle className="h-12 w-12 text-primary" />
-              )}
-            </div>
-            <h1 className="mb-2 text-2xl font-semibold">
-              {isChecking && t('existingInstall.checkingTitle')}
-              {isDetected && t('existingInstall.detectedTitle')}
-              {isUninstalling && t('existingInstall.uninstallingTitle')}
-              {isError && t('existingInstall.uninstallFailedTitle')}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {isChecking && t('existingInstall.checkingDescription')}
-              {isDetected && t('existingInstall.detectedDescription')}
-              {isUninstalling && t('existingInstall.uninstallingDescription')}
-              {isError && t('existingInstall.uninstallFailedDescription')}
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            {details.length > 0 && (
-              <div className="rounded-lg border bg-muted/40 p-4">
-                <p className="mb-2 text-sm font-medium">{t('existingInstall.detectedItemsTitle')}</p>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  {details.map((detail) => (
-                    <li key={detail} className="break-all">
-                      {detail}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {isUninstalling && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">{t('existingInstall.progress')}</span>
-                  <span className="text-primary">{Math.round(progress)}%</span>
-                </div>
-                <Progress value={progress} className="h-2" />
-              </div>
-            )}
-
-            {isError && (
-              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-                <p className="font-medium">{errorMessage || t('existingInstall.uninstallFailedDescription')}</p>
-                {failures.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {failures.map((failure) => (
-                      <li key={failure}>{failure}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {isChecking && (
-              <div className="flex items-center justify-center gap-3 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>{t('existingInstall.checkingHint')}</span>
-              </div>
-            )}
-
-            {isError && (
-              <div className="flex justify-end gap-3">
-                <Button variant="outline" onClick={() => void onCancel()}>
-                  {t('existingInstall.exit')}
-                </Button>
-                <Button onClick={() => void onRetry()}>
-                  {t('existingInstall.retry')}
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <ConfirmDialog
-        open={dialogOpen}
-        title={t('existingInstall.dialogTitle')}
-        message={t('existingInstall.dialogMessage', {
-          details: details.join('；'),
-        })}
-        confirmLabel={t('existingInstall.confirm')}
-        cancelLabel={t('existingInstall.cancel')}
-        variant="destructive"
-        onConfirm={onConfirm}
-        onCancel={() => void onCancel()}
-      />
-    </div>
-  );
 }
 
 function SetupLauncher({ isOpening, onOpen }: SetupLauncherProps) {

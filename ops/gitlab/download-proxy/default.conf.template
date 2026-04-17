@@ -1,0 +1,23 @@
+server {
+    listen 8080;
+    server_name _;
+
+    resolver 127.0.0.11 ipv6=off;
+    client_max_body_size 0;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    location = /health {
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    location ~ ^/downloads/([^/]+)/(.+)$ {
+        set $release_tag $1;
+        set $release_file $2;
+
+        proxy_set_header Host gitlab;
+        proxy_set_header PRIVATE-TOKEN ${GITLAB_RELEASE_DOWNLOAD_TOKEN};
+        proxy_pass ${GITLAB_PACKAGE_PROXY_UPSTREAM}/api/v4/projects/${GITLAB_RELEASE_DOWNLOAD_PROJECT_PATH}/packages/generic/${GITLAB_RELEASE_DOWNLOAD_PACKAGE_NAME}/$release_tag/$release_file;
+    }
+}

@@ -5,6 +5,8 @@ import { Toaster } from 'sonner';
 import i18n from './i18n';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Setup } from './pages/Setup';
+import { ExistingInstallGatePage } from './pages/ExistingInstallGate';
+import { LauncherPage } from './pages/Launcher';
 import { useSettingsStore } from './stores/settings';
 import { useGatewayStore } from './stores/gateway';
 import { useProviderStore } from './stores/providers';
@@ -145,6 +147,8 @@ function App() {
     <ErrorBoundary>
       <TooltipProvider delayDuration={300}>
         <Routes>
+          <Route path="/existing-install" element={<ExistingInstallGatePage />} />
+          <Route path="/launcher" element={<LauncherPage />} />
           <Route path="*" element={<Setup />} />
         </Routes>
 

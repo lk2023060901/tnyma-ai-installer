@@ -73,6 +73,15 @@ Start the optional runner container:
 ```bash
 cd ops/gitlab
 docker compose --env-file gitlab.env --profile docker-runner up -d gitlab-runner
+
+Anonymous release downloads
+
+- Add a read-only package token to `gitlab.env` as `GITLAB_RELEASE_DOWNLOAD_TOKEN`
+- Start the download proxy:
+  `docker compose --env-file gitlab.env up -d gitlab-downloads`
+- Set the GitLab project CI/CD variable:
+  `CI_PUBLIC_DOWNLOAD_BASE_URL=http://<your-lan-ip>:8930/downloads`
+- After that, GitLab Release assets will point to anonymous LAN download links instead of login-protected GitLab URLs.
 ```
 
 Register it with the `docker` tag:

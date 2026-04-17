@@ -3,9 +3,15 @@ import type { HostApiContext } from '../context';
 import { parseJsonBody } from '../route-utils';
 import { setCorsHeaders, sendJson, sendNoContent } from '../route-utils';
 import { runOpenClawDoctor, runOpenClawDoctorFix } from '../../utils/openclaw-doctor';
+import { ensureOpenClawGatewayServiceInstalled } from '../../utils/openclaw-service';
 import { getSetting } from '../../utils/store';
 import { PORTS } from '../../utils/config';
 import { detectInstalledProducts, uninstallInstalledProducts } from '../../services/installed-product';
+
+function getCurrentGatewayOwnedPid(ctx: HostApiContext): number[] {
+  const pid = ctx.gatewayManager?.getStatus?.().pid;
+  return Number.isInteger(pid) && pid > 0 ? [pid] : [];
+}
 
 async function ensureGatewayRunning(ctx: HostApiContext) {
   const status = ctx.gatewayManager.getStatus().state;
@@ -59,13 +65,19 @@ export async function handleAppRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/app/gateway-service/install' && req.method === 'POST') {
+    const body = await parseJsonBody<{ forceRefresh?: boolean }>(req);
+    sendJson(res, 200, await ensureOpenClawGatewayServiceInstalled(Boolean(body.forceRefresh)));
+    return true;
+  }
+
   if (url.pathname === '/api/app/installed-products' && req.method === 'GET') {
-    sendJson(res, 200, await detectInstalledProducts());
+    sendJson(res, 200, await detectInstalledProducts({ ignoredProcessIds: getCurrentGatewayOwnedPid(ctx) }));
     return true;
   }
 
   if (url.pathname === '/api/app/installed-products/uninstall' && req.method === 'POST') {
-    sendJson(res, 200, await uninstallInstalledProducts());
+    sendJson(res, 200, await uninstallInstalledProducts({ ignoredProcessIds: getCurrentGatewayOwnedPid(ctx) }));
     return true;
   }
 

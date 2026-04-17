@@ -548,6 +548,9 @@ exports.default = async function afterPack(context) {
   }
 
   console.log(`[after-pack] Copying bundled Tnyma web stack to ${tnymaWebStackDest} ...`);
-  cpSync(tnymaWebStackSrc, tnymaWebStackDest, { recursive: true });
+  cpSync(tnymaWebStackSrc, tnymaWebStackDest, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
   console.log('[after-pack] ✅ Bundled Tnyma web stack copied.');
 };

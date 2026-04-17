@@ -13,6 +13,8 @@ export interface ProviderModelCatalogEntry {
 
 const PROVIDER_MODELS_HEALTH_RETRIES = 10;
 const PROVIDER_MODELS_HEALTH_DELAY_MS = 800;
+const PROVIDER_MODELS_FETCH_RETRIES = 8;
+const PROVIDER_MODELS_FETCH_WAIT_TIMEOUT_MS = 10_000;
 
 export function supportsProviderModelCatalog(
   account: Pick<ProviderAccount, 'authMode'> | null | undefined,
@@ -78,6 +80,50 @@ export async function fetchProviderModels(
   return Array.isArray(result.models) ? result.models : [];
 }
 
+async function waitForGatewayStableForProviderModels(): Promise<void> {
+  const result = await hostApiFetch<{ success: boolean; error?: string }>(
+    '/api/gateway/wait-until-stable',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        timeoutMs: PROVIDER_MODELS_FETCH_WAIT_TIMEOUT_MS,
+      }),
+    },
+  );
+  if (!result.success) {
+    throw new Error(result.error || 'Gateway did not become stable');
+  }
+}
+
+function shouldRetryProviderModelsFetch(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return message.includes('gateway not connected')
+    || message.includes('gateway is not ready')
+    || message.includes('gateway is stopped')
+    || message.includes('gateway is starting')
+    || message.includes('gateway is reconnecting');
+}
+
+async function fetchProviderModelsWithRetry(
+  accountId: string,
+): Promise<ProviderModelCatalogEntry[]> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < PROVIDER_MODELS_FETCH_RETRIES; attempt += 1) {
+    try {
+      return await fetchProviderModels(accountId);
+    } catch (error) {
+      lastError = error;
+      if (!shouldRetryProviderModelsFetch(error) || attempt === PROVIDER_MODELS_FETCH_RETRIES - 1) {
+        throw error;
+      }
+      await waitForGatewayStableForProviderModels();
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 export async function syncProviderModelsToAccount(params: {
   accountId: string;
   defaultModelId?: string;
@@ -99,7 +145,7 @@ export async function syncProviderModelsToAccount(params: {
     };
   }
 
-  const models = await fetchProviderModels(params.accountId);
+  const models = await fetchProviderModelsWithRetry(params.accountId);
   if (models.length === 0) {
     return { models: [], selectedModelId: account.model };
   }

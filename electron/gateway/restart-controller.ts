@@ -18,6 +18,10 @@ export class GatewayRestartController {
   private deferredRestartPending = false;
   private restartDebounceTimer: NodeJS.Timeout | null = null;
 
+  hasPendingDebouncedRestart(): boolean {
+    return this.restartDebounceTimer !== null;
+  }
+
   isRestartDeferred(context: RestartDeferralState): boolean {
     return shouldDeferRestart(context);
   }

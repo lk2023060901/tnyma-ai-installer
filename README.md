@@ -352,7 +352,8 @@ pnpm run comms:compare    # Compare replay metrics against baseline thresholds
 pnpm run build:vite       # Build frontend only
 pnpm build                # Full production build (with packaging assets)
 pnpm package              # Package for current platform (includes bundled preinstalled skills)
-pnpm package:mac          # Package for macOS
+pnpm package:mac          # Full macOS release packaging (x64 + arm64, dmg + zip, notarization)
+pnpm package:mac:local    # Fast local macOS test packaging (current arch .app + local test zip)
 pnpm package:win          # Package for Windows
 pnpm package:linux        # Package for Linux
 pnpm run cleanup:installed:mac -- --yes  # Remove installed macOS app data, login items, and CLI leftovers

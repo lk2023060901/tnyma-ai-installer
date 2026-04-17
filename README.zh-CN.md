@@ -352,7 +352,8 @@ pnpm run comms:compare    # 将回放指标与基线阈值对比
 pnpm run build:vite       # 仅构建前端
 pnpm build                # 完整生产构建（含打包资源）
 pnpm package              # 为当前平台打包（包含预装技能资源）
-pnpm package:mac          # 为 macOS 打包
+pnpm package:mac          # macOS 正式打包（x64 + arm64、dmg + zip、公证）
+pnpm package:mac:local    # macOS 本地快速测试打包（当前架构 .app + 本地测试 zip）
 pnpm package:win          # 为 Windows 打包
 pnpm package:linux        # 为 Linux 打包
 pnpm run cleanup:installed:mac -- --yes  # 清理已安装的 macOS 应用数据、登录项和 CLI 残留
